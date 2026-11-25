@@ -1,0 +1,87 @@
+# Every push to main, every pull request; and a release, which has this pass first ( release.yml ).
+name: test
+on:
+  push: { branches: [ main ] }
+  pull_request:
+  workflow_call:
+    inputs:
+      version: { type: string, default: "" }
+
+permissions: { contents: read }
+
+env:
+  ERRAND_VERSION: ${{ inputs.version }}
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-latest, macos-latest ]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version-file: go.mod }
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: test -z "$( gofmt -l cmd internal lib )"
+      - run: go vet ./...
+      - run: go test ./...
+
+  # the tests of cmd/errand drive it through a shell, as a person does on Linux or macOS
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version-file: go.mod }
+      - run: go vet ./internal/... ./lib
+      - run: go build ./...
+      - run: go test ./internal/...
+
+  # made once: what is installed below is what a release publishes
+  packages:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-go@v5
+        with: { go-version-file: go.mod }
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: python -m pip install build twine
+      - run: python packaging/backend.py wheels
+      - run: python -m build --outdir dist lib
+      - run: twine check --strict dist/*
+      - uses: actions/upload-artifact@v4
+        with: { name: packages, path: dist, if-no-files-found: error }
+      - run: python packaging/backend.py build
+      - run: mkdir programs && mv dist/errand-*-* programs/ && cd programs && sha256sum * > SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with: { name: programs, path: programs, if-no-files-found: error }
+
+  installed:
+    needs: packages
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-latest, macos-latest, windows-latest ]
+    runs-on: ${{ matrix.os }}
+    defaults: { run: { shell: bash } }
+    steps:
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - uses: actions/download-artifact@v4
+        with: { name: packages, path: dist }
+      - run: pip install --no-index --find-links dist errand-run errand-lib
+      - run: errand --version
+      - run: test -z "$ERRAND_VERSION" || errand --version | grep -F "errand $ERRAND_VERSION "
+      - run: python -c "import errand, os; print( errand.__version__ ); assert os.environ[ 'ERRAND_VERSION' ] in ( '', errand.__version__ )"
+      - name: a run, and an entry
+        run: |
+          mkdir work && cd work
+          printf "import errand\nerrand.envs[ 'e' ] = errand.Env( [ errand.Vars( { 'E': 'set' } ) ] )\n" > errand-envs.py
+          printf "import os\nfrom errand import test\nif test( 'one' ):\n    assert os.environ[ 'E' ] == 'set'\n" > work.py
+          errand run python -c "print( 'ran' )"
+          errand run work.py::one

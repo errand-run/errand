@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+/dist/
+errand-outputs/
+node_modules/
+docs/.vitepress/cache/
+docs/.vitepress/dist/
+.venv*/
+examples/**/build/
+examples/**/target/
+examples/04-catch2/tests/test_*
+!examples/04-catch2/tests/test_*.cpp
+/lib/errand/_version.py

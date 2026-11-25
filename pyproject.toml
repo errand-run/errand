@@ -1,0 +1,5 @@
+# errand-run: the program. The Python library is another distribution, `errand-lib`, in lib/.
+[build-system]
+requires = [ ]
+build-backend = "backend"
+backend-path = [ "packaging" ]

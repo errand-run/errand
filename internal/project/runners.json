@@ -1,0 +1,279 @@
+{
+ "errand": {
+  "type": "Errand",
+  "level": 4,
+  "entries": true,
+  "takes": {
+   "suffixes": [
+    ".py"
+   ],
+   "not_names": [
+    "errand-*.py"
+   ],
+   "holds": "(?m)^[ \\t]*(from[ \\t]+errand(\\.[\\w.]+)?[ \\t]+import|import[ \\t]+([\\w.]+([ \\t]+as[ \\t]+\\w+)?[ \\t]*,[ \\t]*)*errand\\b)"
+  },
+  "zones": {},
+  "list": {
+   "words": [
+    "{python}",
+    "-m",
+    "errand.held",
+    "list",
+    "{tags}",
+    "{files}"
+   ],
+   "line": "^(?P<file>[^:\\t]+\\.py)::(?P<name>[^\\t]+)(?:\\t(?P<params>--[^\\t]*))?(?:\\t#.*)?$"
+  },
+  "run": {
+   "words": [
+    "{python}",
+    "-m",
+    "errand.held",
+    "run",
+    "--report",
+    "{report}",
+    "{tags}",
+    "{entries}",
+    "--",
+    "{args}"
+   ],
+   "entry": "{file}::{name}",
+   "whole": "{file}",
+   "tags": [
+    "--tags"
+   ],
+   "params": true
+  },
+  "report": {
+   "form": "entries",
+   "file": "entries.jsonl",
+   "nothing": 5
+  },
+  "python": true
+ },
+ "pytest": {
+  "type": "Pytest",
+  "level": 3,
+  "entries": true,
+  "takes": {
+   "suffixes": [
+    ".py"
+   ],
+   "names": [
+    "test_*.py",
+    "*_test.py"
+   ],
+   "dirs": null
+  },
+  "zones": {},
+  "list": {
+   "words": [
+    "{python}",
+    "-m",
+    "pytest",
+    "--collect-only",
+    "-q",
+    "{files}"
+   ],
+   "line": "^(?P<file>[^\\s:]+\\.py)::(?P<name>\\S.*)$"
+  },
+  "run": {
+   "words": [
+    "{python}",
+    "-m",
+    "pytest",
+    "-q",
+    "--junitxml={report}",
+    "{entries}",
+    "{args}"
+   ],
+   "entry": "{file}::{name}",
+   "whole": "{file}"
+  },
+  "report": {
+   "form": "junit",
+   "file": "pytest.xml",
+   "nothing": 5
+  },
+  "requires": {
+   "python": [
+    {
+     "module": "pytest",
+     "spec": "pytest"
+    }
+   ],
+   "install": "auto"
+  },
+  "args": []
+ },
+ "catch2": {
+  "type": "Catch2",
+  "level": 3,
+  "entries": true,
+  "takes": {
+   "suffixes": [
+    ".cpp",
+    ".cc",
+    ".cxx",
+    ".c++"
+   ],
+   "names": [
+    "test_*.cpp"
+   ],
+   "dirs": null,
+   "holds": "(?i)catch"
+  },
+  "zones": {},
+  "build": [],
+  "binary": "{beside}/{stem}",
+  "missing": "no binary at {binary}: tell Catch2 how to build it ( build = \"make -C cpp\" ) or where it lands ( binary = \"{build_dir}/{stem}\" )",
+  "list": {
+   "words": [
+    "{binary}",
+    "--list-tests",
+    "--verbosity",
+    "quiet"
+   ],
+   "line": "^(?P<name>\\S.*)$",
+   "each": true
+  },
+  "run": {
+   "words": [
+    "{binary}",
+    "--reporter",
+    "xml::out={report}",
+    "{entries}",
+    "{args}"
+   ],
+   "entry": "{name}",
+   "whole": "",
+   "native": true,
+   "join": ",",
+   "escape": "\\,[]"
+  },
+  "report": {
+   "form": "catch2",
+   "file": "catch2.xml"
+  }
+ },
+ "cargo": {
+  "type": "Cargo",
+  "level": 3,
+  "entries": true,
+  "takes": {
+   "suffixes": [
+    ".rs"
+   ],
+   "near": "Cargo.toml",
+   "near_name": "(?m)^\\s*name\\s*=\\s*\"([^\"]+)\"",
+   "paths": [
+    {
+     "path": "src/lib\\.rs",
+     "words": [
+      "--lib"
+     ]
+    },
+    {
+     "path": "src/main\\.rs",
+     "words": [
+      "--bin",
+      "{near_name}"
+     ]
+    },
+    {
+     "path": "src/bin/(?P<target>[^/]+?)(/main)?\\.rs",
+     "words": [
+      "--bin",
+      "{target}"
+     ]
+    },
+    {
+     "path": "tests/(?P<target>[^/]+?)(/main)?\\.rs",
+     "words": [
+      "--test",
+      "{target}"
+     ]
+    }
+   ]
+  },
+  "zones": {},
+  "build": [
+   "env 'CARGO_TARGET_DIR={build_dir}/target' '{cargo}' test --no-run --manifest-path '{near}'"
+  ],
+  "list": {
+   "words": [
+    "env",
+    "CARGO_TARGET_DIR={build_dir}/target",
+    "{cargo}",
+    "test",
+    "--manifest-path",
+    "{near}",
+    "{variant}",
+    "--",
+    "--list"
+   ],
+   "line": "^(?P<name>\\S+): test$",
+   "each": true
+  },
+  "run": {
+   "words": [
+    "env",
+    "CARGO_TARGET_DIR={build_dir}/target",
+    "{cargo}",
+    "test",
+    "--manifest-path",
+    "{near}",
+    "{variant}",
+    "--",
+    "{exact}",
+    "{entries}",
+    "{args}"
+   ],
+   "entry": "{name}",
+   "whole": "",
+   "exact": [
+    "--exact"
+   ]
+  },
+  "report": {
+   "form": "cargo"
+  }
+ },
+ "python": {
+  "type": "Python",
+  "level": 0,
+  "entries": false,
+  "takes": {
+   "suffixes": [
+    ".py"
+   ]
+  },
+  "zones": {},
+  "run": {
+   "words": [
+    "{python}",
+    "{file}",
+    "{args}"
+   ]
+  },
+  "report": {
+   "form": "exit"
+  }
+ },
+ "executable": {
+  "type": "Executable",
+  "level": 0,
+  "entries": false,
+  "takes": {},
+  "zones": {},
+  "run": {
+   "words": [
+    "{file}",
+    "{args}"
+   ]
+  },
+  "report": {
+   "form": "exit"
+  }
+ }
+}

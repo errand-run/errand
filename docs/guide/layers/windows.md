@@ -1,0 +1,97 @@
+# Windows
+
+```python
+Windows( iso = None, key = None, index = 1, cpus = 4, ram = "8G", disk = "64G", msvc = True,
+         python = "3.13.16", provision = [ ], fetch = [ ], also = [ ], keep = "5m", data = "32G",
+         root = None )
+```
+
+**First, or right after the `Ssh` of the machine that boots it.** A Windows virtual machine under
+QEMU, which errand installs, boots, reaches over ssh and stops. Everything is optional:
+
+```python
+errand.envs[ "win" ] = errand.Env( [ errand.Windows( fetch = [ "build" ] ) ] )
+```
+
+```bash
+errand setup --env win                         # the install: once, 20 to 60 minutes
+errand run --env win cmake -B build -G Ninja   # then: commands, through errand's agent in the guest
+errand run --env win cmake --build build
+errand vm stop                                 # stop it now, here and on each machine an Ssh leads to
+```
+
+With no `iso` and no `key` it is **Windows Server 2025, evaluation edition**: downloaded from
+Microsoft, no licence needed for 180 days, and reinstalled by errand before it runs out. Server Core
+by default — no desktop, which nothing run over ssh needs. `msvc` puts the Visual Studio build tools
+in it (cl, link, msbuild, cmake, ninja) and calls `vcvars64` before every command.
+
+| | |
+|---|---|
+| `iso`, `key`, `index` | another Windows: a path or a URL, its product key, which image of the ISO |
+| `cpus`, `ram` | the size of the machine — how it is *booted*, so changing it reinstalls nothing |
+| `disk` | the size of the system disk, which grows as it is written up to this |
+| `python` | the python.org release installed and on `PATH`, which errand runs in: `"3.13.16"` by default |
+| `provision` | more to install: a `.ps1` of the project, or a line of PowerShell |
+| `fetch` | paths of the project brought back after each command — `build`, `dist` |
+| `also` | sibling checkouts the work needs ( `../loom` ), copied in beside the project |
+| `keep` | how long it stays up once no command uses it and nothing runs in it any more — `"15m"` to keep it warm between commands |
+| `data` | a disk kept from one boot to the next, as `E:`, where the project lands — so a build is there for the next command. Grows up to this size; `None`: everything on `C:`, reset at each boot |
+| `root` | where the project goes over there; `E:/<project name>`, or `C:/errand/<project name>` without `data` |
+
+What it costs, and when:
+
+- **The install** is a build like any other layer's: `errand setup` does it, a changed declaration redoes
+  it, `--dry-run` says it would. The disk image is the project's: it goes to `errand-outputs/builds/windows/`
+  in the project's copy over there ( or under `builds_directory` ), named by what it was installed
+  from. The ISO is downloaded to `builds/downloads/` and removed once the install is done. Once a new
+  image is ready, the images no environment of the project declares any more are removed. Projects
+  share one image by pointing [`builds_directory`](../configuration#configure) at a shared directory.
+- **A boot** starts from a fresh copy-on-write layer over that image — nothing a run left behind
+  survives a restart — and the machine then stays up while a command uses it, or something errand
+  started runs in it (a command whose laptop closed included), then `keep` more. All that time
+  it holds its cores and memory, so it holds them **in the queue**, and shows in `errand queue`.
+- **A command** costs a sync of the project in: what changed since the last command, onto `E:`
+  (all of it with `data = None`). Then `fetch` comes back. Both go straight between here and an
+  errand agent in the guest, as for an `Ssh`. The machine that runs QEMU
+  holds no copy of the project. A file removed from the project is removed over there too, except
+  in a zone (`build`, errand's outputs, the project's own). Commands on one machine take turns.
+
+The guest needs nothing for that beyond the Python errand runs in. The machine that runs QEMU needs
+`qemu-system-x86_64` and `qemu-img`, and an **x86-64 host**: KVM on Linux, HVF on an Intel
+Mac. Without hardware virtualization it works, in hours. When QEMU is missing, or `/dev/kvm` is there
+but not yours (the usual case over ssh), errand says which command fixes it on that machine.
+
+Apple Silicon cannot boot it, but can reach a machine that does — an `Ssh` in front:
+
+```python
+errand.envs[ "win" ] = errand.Env( [ errand.Ssh( host = "x86-box", root = "/home/me/proj" ),
+                                     errand.Windows( fetch = [ "build" ] ) ] )
+```
+
+The layer does its own work through the machine `Ssh` leads to — `ctx.host`, a way to run a shell
+line over there and read its answer. What keeps the machine is over there too, with QEMU: a small
+**keeper** process, which errand's agent on that machine starts and owns, and whose child QEMU is.
+Whatever ends the keeper ends QEMU; whatever ends the agent ends the keeper, at the latest when the
+next agent starts there. A command holds the machine through that agent for as long as it runs,
+and a command killed or cut off lets go of it at once. The machine counts in that machine's
+[queue](../machine), and `errand vm stop` stops it there, through each `Ssh` of the project.
+→ [ADR 0008](https://github.com/errand-run/errand/blob/main/docs/adr/0008-nothing-runs-unowned.md)
+`ERRAND_VM_VNC=1` shows the screen on `vnc://127.0.0.1:5901`, for watching an install go wrong.
+
+## errand runs in it
+
+Every guest has a Python, and the guest is a place like any other. errand copies its
+own sources in, starts an agent there through the layer (`cd`, `vcvars64`, the variables of the
+layers after it), and runs everything through it: entries ( a `::` target ), files, commands, `-j`,
+with the same report and the same records, which come back here. `errand shell --env win` is
+`cmd.exe` in a pseudo-console, with colours, Ctrl-C and resizing.
+
+The machine is held for as long as the command runs, and `keep` says how long it stays up after
+that: five minutes by default. While it is up, its agent is too, and the next command starts at once.
+Kept up and unused, it is only kept warm. Its claim in the queue of the machine that runs QEMU says
+so, and any work that needs its cores asks for them: the machine stops then, without waiting for the
+end of `keep`.
+
+Everything the agent starts there is in a Windows Job Object that only the agent holds: a stop ends
+the whole tree, and an agent that dies, however it dies, takes all of it along.
+`--batch` does not reach a virtual machine yet: it says so and stops.

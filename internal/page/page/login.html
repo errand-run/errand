@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>errand</title>
+<style>
+:root { --bg: #fbfbfa; --fg: #1d1d1b; --dim: #74746f; --line: #d9d8d3; --acc: #0f7c8a; --bad: #b42318; }
+@media (prefers-color-scheme: dark) { :root { --bg: #151618; --fg: #e6e5e1; --dim: #8d8c87; --line: #33343a; --acc: #5fc4d0; --bad: #f2776b; } }
+body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: var(--bg); color: var(--fg);
+       font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+form { width: min(520px, calc(100vw - 32px)); }
+h1 { font-size: 18px; color: var(--acc); margin: 0 0 12px; }
+p { color: var(--dim); margin: 6px 0; }
+input { width: 100%; font: inherit; padding: 8px 10px; margin: 12px 0; background: transparent; color: var(--fg);
+        border: 1px solid var(--line); border-radius: 6px; }
+button { font: inherit; padding: 6px 16px; border-radius: 6px; border: 1px solid var(--acc); background: var(--acc); color: var(--bg); cursor: pointer; }
+code { color: var(--fg); }
+.bad { color: var(--bad); }
+</style></head>
+<body><form method="post" action="/login">
+<h1>errand</h1>
+<p>This page shows your runs: it opens to the token of your errand only.</p>
+<p><code>errand web</code> opens it directly; otherwise, paste what <code>errand web token</code> prints.</p>
+<p class="bad">{said}</p>
+<input name="token" type="password" autocomplete="off" autofocus placeholder="token">
+<input name="next" type="hidden" value="{next}">
+<button>open</button>
+</form></body></html>

@@ -1,0 +1,35 @@
+[build-system]
+requires = [ "hatchling" ]
+build-backend = "hatchling.build"
+
+[project]
+name = "errand-lib"
+dynamic = [ "version" ]
+description = "What a project declares to errand, and what a run written in Python says to it"
+readme = "README.md"
+requires-python = ">=3.8"
+license = "MIT"
+authors = [ { name = "Hugo Leclerc" } ]
+dependencies = [ ]
+
+[project.urls]
+Homepage = "https://github.com/errand-run/errand"
+Issues = "https://github.com/errand-run/errand/issues"
+
+[tool.hatch.version]
+source = "code"
+path = "version.py"
+expression = "version()"
+
+[tool.hatch.build.hooks.version]
+path = "errand/_version.py"
+template = "__version__ = {version!r}\n"
+
+[tool.hatch.build]
+artifacts = [ "errand/_version.py" ]
+
+[tool.hatch.build.targets.wheel]
+packages = [ "errand" ]
+
+[tool.hatch.build.targets.sdist]
+include = [ "errand", "version.py", "README.md", "LICENSE" ]

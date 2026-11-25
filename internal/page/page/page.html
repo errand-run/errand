@@ -1,0 +1,1376 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>errand</title>
+<style>
+:root { --bg: #fbfbfa; --fg: #1d1d1b; --dim: #7a7a74; --faint: #b5b4ae; --line: #e3e2de; --sel: #e4eef0; --hover: #f1f0ec;
+        --pre: #f4f3f0; --acc: #0f7c8a; --place: #8a3f8f; --ok: #1f7a3e; --wait: #a66200; --bad: #b42318;
+        --g1: #2f9e55; --g2: #c98a00; --g3: #c7362b; }
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #151618; --fg: #e6e5e1; --dim: #8d8c87; --faint: #4c4d52; --line: #2a2b30; --sel: #1d3236; --hover: #1d1e22;
+          --pre: #1b1c1f; --acc: #5fc4d0; --place: #d38bd8; --ok: #5cc27f; --wait: #e6a23c; --bad: #f2776b;
+          --g1: #4fbf73; --g2: #e3b341; --g3: #f0685c; }
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+       display: flex; flex-direction: column; }
+button { font: inherit; color: inherit; background: transparent; border: 1px solid var(--line); border-radius: 5px;
+         padding: 1px 9px; cursor: pointer; white-space: nowrap; }
+button:hover { border-color: var(--dim); }
+button.danger { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 45%, transparent); }
+button.primary { background: var(--acc); border-color: var(--acc); color: var(--bg); }
+button kbd { color: var(--dim); font: inherit; margin-left: 6px; }
+button.primary kbd { color: inherit; opacity: .7; }
+
+header { display: flex; gap: 10px; align-items: center; padding: 6px 14px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+header .name { color: var(--acc); font-weight: 700; font-size: 14px; margin-right: 6px; text-decoration: none; }
+.tab { border: 0; border-radius: 5px; padding: 2px 10px; color: var(--dim); }
+.tab.on { background: var(--acc); color: var(--bg); font-weight: 600; }
+.tab kbd { font: inherit; opacity: .6; margin-right: 6px; }
+#q { font: inherit; padding: 2px 8px; width: 260px; max-width: 40vw; background: transparent; color: var(--fg);
+     border: 1px solid var(--line); border-radius: 5px; }
+#counts { margin-left: auto; display: flex; gap: 16px; color: var(--dim); white-space: nowrap; }
+#counts .on.run { color: var(--ok); font-weight: 600; } #counts .on.wait { color: var(--wait); font-weight: 600; }
+
+main { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(200px, var(--left, 55%)) 6px minmax(240px, 1fr); }
+.pane { overflow: auto; min-height: 0; outline: none; }
+#list { padding: 4px 0; }
+#right { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+#detail { flex: 1 1 auto; }
+#view { flex: none; height: var(--bottom, 40%); padding: 6px 16px 16px; display: none; }
+#right.viewing #view, #right.viewing #hsplit { display: block; }
+.split { background: var(--line); position: relative; z-index: 2; }
+.split::after { content: ""; position: absolute; inset: -3px; }          /* easier to catch */
+.split.v { cursor: col-resize; width: 1px; justify-self: center; } .split.v:hover, .split.v.drag { width: 3px; background: var(--acc); }
+.split.h { cursor: row-resize; height: 1px; flex: none; display: none; } .split.h:hover, .split.h.drag { height: 3px; background: var(--acc); }
+body.dragging { user-select: none; }
+.pane.focus { box-shadow: inset 0 2px 0 var(--acc); }
+
+.row { display: flex; align-items: center; gap: 8px; padding: 0 14px; cursor: pointer; white-space: pre; min-height: 21px; }
+.row:hover { background: var(--hover); }
+.row.sel { background: var(--sel); }
+.pane:not(.focus) .row.sel { background: color-mix(in srgb, var(--sel) 55%, transparent); }
+.row.marked { background: color-mix(in srgb, var(--sel) 70%, transparent); box-shadow: inset 2px 0 0 var(--acc); }
+.row.going { opacity: .38; }                            /* being removed: greyed until it is gone */
+.row.going .label { text-decoration: line-through; text-decoration-color: var(--faint); }
+.row .fold { width: 1.2ch; color: var(--dim); flex: none; }
+.row .sign { width: 1.4ch; text-align: center; flex: none; }
+.row .busy { font-size: 0.7em; margin-left: 0.8ch; vertical-align: 0.15em; }
+.row .label { overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 0 1 auto; }
+.row .label .where { color: var(--dim); }
+.row.thead { color: var(--dim); cursor: default; } .row.thead .th { cursor: pointer; } .row.thead .th:hover { color: var(--acc); }
+.row.tnode .label { color: var(--fg); }
+.row.tnode.l-dir .label { color: var(--acc); font-weight: 600; }      /* a folder: apart from the files and runs */
+.row .right { margin-left: auto; color: var(--dim); overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 0 1 auto;
+              max-width: 55%; padding-left: 12px; }
+.row.proc .right, .row.run .right { flex: none; }        /* the time, the step: kept, the name gives way */
+.row.machine .label, .row.broken .label { font-weight: 600; }
+.row.dormant { color: var(--faint); }
+.row.day .label, .row.group .label, .row.centries .label { color: var(--dim); font-weight: 600; }
+.row.cache .label { font-weight: 600; }
+.row.note .label, .row.more .label { color: var(--dim); }
+.row.broken .right { color: var(--bad); }
+.hit { color: var(--acc); font-weight: 700; }
+.m-run, .m-ok { color: var(--ok); } .m-wait { color: var(--wait); } .m-FAIL, .m-orph, .m-lost { color: var(--bad); } .m-dead { color: var(--wait); } .m-skip { color: var(--dim); } .m-there { color: var(--wait); }
+.row.machine .label, .row.broken .label, .row.dormant .label { flex: none; width: 24ch; }   /* the gauges in one column */
+.meters { display: flex; gap: 14px; color: var(--dim); flex: none; }
+.meter { display: flex; align-items: center; gap: 5px; width: 15ch; }
+.meter > span:first-child { width: 4ch; }
+.bar { width: 46px; height: 7px; border-radius: 4px; background: var(--line); overflow: hidden; }
+.bar i { display: block; height: 100%; background: var(--g1); }
+.bar i.l2 { background: var(--g2); } .bar i.l3 { background: var(--g3); }
+.meter b { font-weight: normal; width: 4ch; text-align: right; color: var(--fg); }
+
+#detail { padding: 10px 16px 24px; }
+#detail h2 { font-size: 14px; margin: 0 0 6px; word-break: break-all; }
+.tools { display: flex; gap: 6px; flex-wrap: wrap; margin: 6px 0 10px; }
+.facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); column-gap: 14px; }
+.facts .k { color: var(--dim); }
+.facts .v { word-break: break-all; }
+.more { color: var(--dim); cursor: pointer; margin-top: 2px; user-select: none; }
+.copies { display: grid; grid-template-columns: max-content minmax(0, 1fr) max-content; column-gap: 14px; row-gap: 3px; align-items: center; }
+.copies .k { color: var(--dim); }
+.head { display: flex; align-items: center; gap: 8px; margin: 0 0 8px; min-width: 0; }
+.head h2 { margin: 0 !important; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.badge { flex: none; padding: 0 7px; border-radius: 5px; font-weight: 600; background: var(--hover); color: var(--dim); }
+.badge.ok { background: color-mix(in srgb, var(--ok) 16%, transparent); color: var(--ok); }
+.badge.bad { background: color-mix(in srgb, var(--bad) 16%, transparent); color: var(--bad); }
+.badge.run { background: color-mix(in srgb, var(--ok) 16%, transparent); color: var(--ok); }
+.badge.wait { background: color-mix(in srgb, var(--wait) 16%, transparent); color: var(--wait); }
+.chips { display: grid; grid-template-columns: repeat(auto-fill, minmax(20ch, 1fr)); gap: 2px 14px; margin: 2px 0 8px; }
+.chips .br { grid-column: 1 / -1; height: 0; }
+.chip { display: flex; align-items: center; gap: 7px; min-width: 0; padding: 0 4px; margin: 0 -4px; border-radius: 4px; }
+.chip > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chip.click { cursor: pointer; color: var(--acc); }
+.chip.click:hover { background: var(--hover); }
+.chip.shown { background: var(--sel); }
+svg.i { flex: none; width: 14px; height: 14px; color: var(--dim); fill: none; stroke: currentColor; stroke-width: 1.3;
+        stroke-linecap: round; stroke-linejoin: round; }
+.out svg.i { margin-right: 2px; }
+.out .n { display: flex; align-items: center; gap: 7px; }
+.out.empty { color: var(--faint); cursor: default; }
+.out.empty .e { cursor: pointer; } .out.empty .e:hover { color: var(--fg); }
+.out.empty .e.sel { background: var(--sel); color: var(--fg); border-radius: 3px; }
+.more:hover { color: var(--fg); }
+.path { color: var(--acc); cursor: pointer; border-radius: 3px; }
+.path:hover { text-decoration: underline; }
+.path.shown { background: var(--sel); }
+.vhead { display: flex; gap: 6px; align-items: center; position: sticky; top: -6px; background: var(--bg); padding: 4px 0 6px; flex-wrap: wrap; }
+.vhead .where { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; color: var(--dim); }
+.vhead .where b { color: var(--fg); font-weight: 600; }
+.vhead button, .vhead a.btn { padding: 0 7px; }
+a.btn { font: inherit; color: inherit; border: 1px solid var(--line); border-radius: 5px; padding: 1px 9px; text-decoration: none; white-space: nowrap; }
+a.btn:hover { border-color: var(--dim); }
+.tk-c { color: var(--dim); font-style: italic; } .tk-s { color: var(--ok); } .tk-k { color: var(--place); font-weight: 600; }
+.tk-n { color: var(--wait); } .tk-f { color: var(--acc); } .tk-d { color: var(--place); } .tk-key { color: var(--acc); }
+.code { white-space: pre; overflow-x: auto; border-left: 2px solid var(--line); padding: 2px 0 2px 10px; margin: 2px 0 2px 6px;
+        background: var(--pre); border-radius: 0 5px 5px 0; }
+body.job #list, body.job .tab, body.job #q, body.job #hsplit { display: none !important; }
+body.job #view { height: 100% !important; }
+/* the run's dashboard ( grill/dashboard ): what to look at in big, the console in a strip below */
+.dash { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+#dtop { flex: 0 0 var(--dtop, 70%); min-height: 0; display: flex; flex-direction: column; }
+.dash:has(#dcons.folded) #dtop { flex: 1 1 auto; }
+#dbody { flex: 1 1 auto; min-height: 0; overflow: auto; }
+#dbody .peek, #dbody .peek iframe { height: 100%; }
+#dsplit { display: block; margin: 3px 0; }
+#dcons { flex: 1 1 auto; min-height: 0; overflow: auto; }
+#dcons.folded { flex: 0 0 auto; overflow: hidden; }
+.dchead { position: sticky; top: 0; z-index: 1; background: var(--bg); color: var(--dim); font-size: 12px; }
+.dchead button { border: none; background: none; color: inherit; cursor: pointer; padding: 0 4px; font: inherit; }
+#dtabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 4px; } #dtabs:empty { display: none; }
+.dtab { cursor: pointer; padding: 1px 8px; border: 1px solid var(--line); border-radius: 5px; color: var(--dim); }
+.dtab:hover { border-color: var(--dim); } .dtab.on { color: var(--fg); border-color: var(--acc); }
+body.only header, body.only footer, body.only #detail, body.only .split { display: none !important; }
+body.only main { grid-template-columns: 1fr; }
+body.only #view { padding: 4px 16px 16px; }
+body.only .vhead a.btn[target], body.only .vhead [data-v="close"] { display: none; }    /* it is the tab, there is nothing behind */
+.ent { display: grid; grid-template-columns: minmax(0, 1fr) 10ch 8ch; gap: 10px; padding: 0 6px; border-radius: 4px; cursor: pointer; }
+.ent:hover { background: var(--hover); }
+.ent .s, .ent .a { color: var(--dim); text-align: right; }
+.ent.dir .n { color: var(--acc); }
+.menu { position: fixed; z-index: 9; background: var(--bg); border: 1px solid var(--line); border-radius: 7px; padding: 4px;
+        box-shadow: 0 8px 28px rgba(0,0,0,.2); min-width: 220px; display: none; }
+.menu.on { display: block; }
+.menu div { padding: 3px 10px; border-radius: 4px; cursor: pointer; display: flex; gap: 16px; }
+.menu div:hover { background: var(--sel); }
+.menu div.off { color: var(--faint); pointer-events: none; }
+.menu kbd { margin-left: auto; color: var(--dim); font: inherit; }
+h3 { font-size: 12px; color: var(--dim); font-weight: 600; margin: 14px 0 4px; text-transform: lowercase; letter-spacing: .02em; }
+.out { display: flex; gap: 10px; padding: 1px 8px; margin: 0 -8px; border-radius: 5px; cursor: pointer; align-items: center; }
+.out:hover { background: var(--hover); }
+.out.sel { background: var(--sel); }
+.out .n { overflow: hidden; text-overflow: ellipsis; }
+.out .d { margin-left: auto; color: var(--dim); white-space: nowrap; }
+.out .tw { flex: none; width: 1.6ch; text-align: center; color: var(--dim); margin-left: -4px; border-radius: 3px; }
+.out .tw:hover { color: var(--fg); background: var(--line); }
+.out.in .n { color: var(--fg); } .out.dir .n { color: var(--acc); } .out.cur { box-shadow: inset 2px 0 0 var(--acc); }
+.out.in.note { cursor: default; color: var(--dim); }
+.crumb { color: var(--acc); cursor: pointer; border-radius: 3px; } .crumb:hover { text-decoration: underline; }
+/* a record, as a tree that folds */
+.js { margin: 2px 0 2px 2px; line-height: 1.55; }
+.js .jr { display: flex; gap: 0 8px; align-items: baseline; padding-left: calc(var(--d) * 18px); border-radius: 4px; }
+.js .jr:hover { background: var(--hover); }
+.js .jr.fold { cursor: pointer; }
+.js .tw { flex: none; width: 1.2ch; color: var(--dim); user-select: none; }
+.js .jk { flex: none; color: var(--acc); max-width: 40ch; overflow-wrap: anywhere; } .js .jk.i { color: var(--faint); }
+.js .jv { min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.js .sum { color: var(--dim); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.js .jf { padding-left: calc(var(--d) * 18px + 2.2ch); display: flex; flex-wrap: wrap; gap: 0 1.6ch; }
+.js .js-s { color: var(--ok); } .js .js-n { color: var(--wait); font-variant-numeric: tabular-nums; } .js .js-b { color: var(--place); font-weight: 600; } .js .js-0 { color: var(--faint); font-style: italic; }
+.js a { color: inherit; }
+.js .p { color: var(--faint); }
+.jt { margin: 2px 0 4px calc(var(--d) * 18px + 2.2ch); overflow-x: auto; }
+.jt table { border-collapse: collapse; font: inherit; }
+.jt th { text-align: left; color: var(--acc); font-weight: 600; position: sticky; top: 0; background: var(--bg); }
+.jt th, .jt td { padding: 0 14px 0 0; white-space: nowrap; max-width: 46ch; overflow: hidden; text-overflow: ellipsis; border-bottom: 1px solid var(--line); vertical-align: top; }
+.jt td.i, .jt th.i { color: var(--faint); text-align: right; } .jt td.num { text-align: right; }
+.out .go { visibility: hidden; display: flex; gap: 4px; }
+.out:hover .go, .out.sel .go { visibility: visible; }
+.out .go a { color: var(--acc); text-decoration: none; padding: 0 4px; }
+.console { margin-top: 12px; }
+.chead { color: var(--acc); font-weight: 700; }
+.lines { border-left: 2px solid var(--line); margin: 2px 0 2px 6px; padding: 2px 0 2px 10px; white-space: pre-wrap;
+         word-break: break-all; background: var(--pre); border-radius: 0 5px 5px 0; }
+.lines.err { border-left-color: var(--wait); }
+.cend { margin-left: 6px; } .cend .st { font-weight: 700; }
+.st.PASS { color: var(--ok); } .st.FAIL, .st.ERROR, .st.TIMEOUT { color: var(--bad); } .st.SKIP { color: var(--wait); }
+.note { color: var(--dim); } .broken { color: var(--bad); }
+.peek img { max-width: 100%; border: 1px solid var(--line); border-radius: 5px; background: #fff; }
+.peek iframe { width: 100%; height: 100%; min-height: 200px; border: 1px solid var(--line); border-radius: 5px; background: #fff; }
+.a1 { font-weight: 700; } .a2 { opacity: .65; } .a3 { font-style: italic; } .a4 { text-decoration: underline; }
+.c0 { color: #555; } .c1 { color: var(--bad); } .c2 { color: var(--ok); } .c3 { color: var(--wait); } .c4 { color: #3b6fd8; }
+.c5 { color: var(--place); } .c6 { color: var(--acc); } .c7 { color: var(--dim); }
+
+footer { border-top: 1px solid var(--line); padding: 3px 14px; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+footer.said { color: var(--wait); }
+footer kbd { font: inherit; color: var(--fg); }
+
+.veil { position: fixed; inset: 0; background: color-mix(in srgb, var(--bg) 55%, transparent); display: none; place-items: center; z-index: 5; }
+.veil.on { display: grid; }
+.box { background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; width: min(560px, calc(100vw - 32px));
+       box-shadow: 0 12px 40px rgba(0,0,0,.18); }
+.box.danger { border-color: var(--bad); }
+.box h4 { margin: 0 0 10px; font-size: 14px; }
+.box ul { margin: 0 0 14px; padding-left: 18px; color: var(--dim); }
+.box input { width: 100%; font: inherit; padding: 6px 8px; margin: 0 0 14px; background: transparent; color: var(--fg);
+             border: 1px solid var(--acc); border-radius: 5px; }
+.box .keys { display: flex; gap: 8px; justify-content: flex-end; }
+.box button:disabled { opacity: .45; cursor: default; }
+.box.wide { width: min(860px, calc(100vw - 32px)); }
+.found { max-height: 60vh; overflow: auto; margin: 0 0 14px; }
+.found .f { display: flex; gap: 8px; padding: 2px 0; overflow-wrap: anywhere; } .found .s { flex: none; width: 1.4ch; color: var(--dim); }
+.found .wrong > .s { color: var(--bad); } .found .ok > .s, .found .done > .s { color: var(--ok); }
+.found .fx { color: var(--acc); } .found .l { color: var(--dim); padding-left: 2ch; }
+.box li.wait { color: var(--dim); }
+.help { display: grid; grid-template-columns: max-content 1fr; gap: 2px 16px; margin-bottom: 12px; }
+.help kbd { font: inherit; color: var(--acc); }
+@media (max-width: 800px) { main { grid-template-columns: 1fr; } .split.v { display: none; } #list { border-bottom: 1px solid var(--line); max-height: 45vh; } #counts { margin-left: 0; } }
+</style>
+</head>
+<body>
+<header>
+  <a class="name" href="/" title="all the runs and machines">errand</a>
+  <button class="tab" data-tab="runs"><kbd>1</kbd>runs</button>
+  <button class="tab" data-tab="machines"><kbd>2</kbd>machines</button>
+  <button class="tab" data-tab="caches"><kbd>3</kbd>storage</button>
+  <input id="q" placeholder="/ filter: machine, project, what, env, state" autocomplete="off" spellcheck="false">
+  <button id="check" title="the runs other machines hold that are not here: listed, marked ◇, to bring back or remove">check<kbd>c</kbd></button>
+  <button id="refresh" title="ask every machine again now">↻<kbd>R</kbd></button>
+  <button id="helpb" title="keys">?</button>
+  <span id="counts"></span>
+</header>
+<main id="main">
+  <div id="list" class="pane focus" tabindex="0"></div>
+  <div class="split v" id="vsplit" title="drag"></div>
+  <div id="right" class="viewing">
+    <div id="detail" class="pane" tabindex="0"><span class="note">choose a row</span></div>
+    <div class="split h" id="hsplit" title="drag"></div>
+    <div id="view" class="pane" tabindex="0"><div id="vh"></div><div id="vb" style="height:calc(100% - 34px)"></div></div>
+  </div>
+</main>
+<div class="menu" id="menu"></div>
+<footer id="foot"></footer>
+<div class="veil" id="veil"><div class="box" id="box"></div></div>
+<script>
+"use strict";
+const SIGNS = {run: "●", wait: "◌", ok: "✓", FAIL: "✗", skip: "–", lost: "?", orph: "?", dead: "✗", going: "·", there: "◇"};
+// what the detail says always; the rest is folded ( `more` )
+const RARE = new Set(["pid", "agent", "id", "outputs", "reached", "host", "keeper", "qemu", "port", "image", "warm", "agents", "said"]);
+const OPENED_IN_A_TAB = /\.(html?|svg|pdf|png|jpe?g|gif|webp|bmp)$/i;
+const HINT = "<kbd>1</kbd> runs · <kbd>2</kbd> machines · <kbd>3</kbd> storage · <kbd>↑↓</kbd> choose · <kbd>→←</kbd> unfold, fold · <kbd>tab</kbd> detail · " +
+             "click: show · double-click, <kbd>⌘</kbd>-click: open · right-click: more · <kbd>k</kbd> kill · <kbd>r</kbd> rename · <kbd>?</kbd> keys";
+const KEYS = [
+  ["↑ ↓  pgup pgdn", "move in the pane in front"], ["1  2  3", "the runs tab ( running, waiting, done ), the machines tab, the storage tab ( mounts, errand's directories, caches )"],
+  ["→  ←", "unfold, fold: a machine, a day · ← on a row inside: up to what holds it"],
+  ["tab", "the other pane: the list, or the detail ( its outputs: the one chosen is shown below )"],
+  ["→  ←", "in the detail: unfold, fold a folder"],  ["backspace", "in the pane below: back to what it showed before"],
+  ["click", "a row: its detail · a file, a folder: shown in the pane below"],
+  ["double-click, ⌘-click", "open it: a page or an image in a tab, a text in an editor, a folder in the Finder"],
+  ["right-click", "everything that can be done with it"],
+  ["enter  o", "open the output chosen ( as a double-click )"], ["e", "the output chosen in an editor of this machine"],
+  ["d", "the output chosen, downloaded · in the runs' list: remove the runs under the row ( for good, once confirmed )"],
+  ["D", "runs: keep only the latest of each parameter set and env ( and its last PASS ), the rest removed"],
+  ["c  b", "runs: check the other machines for runs not here ( ◇ ) · bring one back"],
+  ["⇧↑  ⇧↓  ⇧-click", "runs: several rows chosen together, for d and D · ⌘-click: one more, or one less · esc: one again"],
+  ["s / click a column", "runs: a parameter table sorted by that column ( again: the other way )"], ["esc", "back to the console · clear the filter"],
+  ["k", "kill what is chosen, once confirmed: a process, a vm, or all errand runs on a machine"],
+  ["f  a  r", "forget, watch or not, name the machine"], ["/", "filter: machine, project, command, state"], ["R", "ask every machine again now"],
+  ["i  u", "caches: remove the dead entries, those unused for n days -- of a place, or of every place on a cache's row"],
+  ["d  D", "caches: the entry chosen removed where it is dead or unused, or everywhere it is"],
+  ["h", "caches: the machine of the place chosen holds its directory ( its agent purges it daily )"],
+  ["n  v", "caches: the days after which an entry is unused ( 30 ) · every entry, or the dead and unused only"]];
+const CACHE_ACTS = {dead: ["remove dead", "i"], unused: ["remove unused", "u"], flagged: ["remove where dead or unused", "d"], everywhere: ["remove everywhere", "D"], version: ["remove this version", "d"], devtoggle: ["dev source off / on", "d"]};
+
+const $ = id => document.getElementById(id);
+const MAC = /Mac|iPhone|iPad/.test(navigator.platform);
+// a part of the page rebuilt only when what it shows changed: a frame is not reloaded, a click is not
+// lost between its press and its release because the button was replaced under it
+function put(el, html) { if (el._html === html) return false; el._html = html; el.innerHTML = html; return true; }
+function load(k, d) { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch (e) { return d; } }
+function keep(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} }
+function esc(s) { return String(s ?? "").replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"})[c]); }
+function size(n) { for (const u of ["B", "kB", "MB", "GB"]) { if (n < 1000 || u == "GB") return u == "B" ? n + " B" : n.toFixed(1) + " " + u; n /= 1000; } }
+function ago(s) { s = Math.max(0, Math.floor(s)); return s < 90 ? s + " s" : s < 5400 ? Math.floor(s / 60) + " min" : s < 172800 ? Math.floor(s / 3600) + " h" : Math.floor(s / 86400) + " d"; }
+
+// `/job?key=…[&path=…]`: one run as a page of its own -- its detail and outputs left, the one chosen right
+const JOB = location.pathname == "/job", JOBQ = new URLSearchParams(location.search);
+const ONLY = JOB && JOBQ.has("only");                  // `&only=1`: the content alone, read again as it changes
+let jobPath = JOB ? JOBQ.get("path") : null;
+let cacheDays = load("cacheDays", 30), cacheAll = load("cacheAll", false);
+let tab = load("tab", "runs"), folded = new Set(load("folded", [])), opened = new Set(load("opened", [])), shown = 50, query = "";
+let rows = [], sel = decodeURIComponent(location.hash.slice(1)) || null, focus = "list", showMore = load("more", false);
+let det = null, dsel = -1, said = "", saidAt = 0, modal = null, view = null;   // view: { key, path, dir, got }
+// Where the row looked at is: a run running is both under "running" and in the tree, with one key ( it stays chosen as
+// it ends ), so the key alone does not say which line; of the rows with that key, the one nearest `selAt`.
+let selAt = -1;
+function selIndex() {
+  let b = -1;
+  for (let i = 0; i < rows.length; i++)
+    if (rows[i].key == sel && (b < 0 || Math.abs(i - selAt) < Math.abs(b - selAt))) b = i;
+  return b;
+}
+let marked = new Set(), anchor = null, greyed = new Set();   // rows chosen together ( ⇧ ), rows greyed before the page knows
+
+async function ask(path, opts) {
+  const r = await fetch(path, opts);
+  if (r.status == 401) { location.reload(); throw new Error("signed out"); }
+  const got = await r.json().catch(() => ({error: r.status + " " + r.statusText}));
+  if (!r.ok || got.error) throw new Error(got.error || r.statusText);
+  return got;
+}
+async function act(op, extra) {
+  try {
+    const got = await ask("/act", {method: "POST", headers: {"Content-Type": "application/json"},
+                                   body: JSON.stringify({op, key: sel || "", ...extra})});
+    if (got.confirm) return confirmBox(got.confirm, () => act(op, {...extra, sure: true}));
+    if (got.prompt) return promptBox(got.prompt, label => act(op, {...extra, label}));
+    say(got.said || "");
+  } catch (e) { say(e.message); }
+  refresh();
+}
+function say(s) { said = s; saidAt = Date.now(); foot(); }
+let kept = true;                                           // ( ADR 0028 §6: the page's address kept by the system, or not )
+function foot() {
+  const f = $("foot"), live = said && Date.now() - saidAt < 8000;
+  f.className = live ? "said" : "";
+  f.innerHTML = live ? esc(said) : HINT + (kept ? "" : " · <span title=\"the system holds the port, nothing of errand's runs in between\">this page goes when errand stops: <code>errand web keep</code> keeps its address</span>");
+}
+
+// ── the splitters ──────────────────────────────────────────────────────────
+function drag(bar, move) {
+  bar.addEventListener("pointerdown", e => {
+    e.preventDefault(); bar.setPointerCapture(e.pointerId); bar.classList.add("drag"); document.body.classList.add("dragging");
+    const up = () => { bar.classList.remove("drag"); document.body.classList.remove("dragging");
+                       bar.removeEventListener("pointermove", mv); bar.removeEventListener("pointerup", up); };
+    const mv = ev => move(ev);
+    bar.addEventListener("pointermove", mv); bar.addEventListener("pointerup", up);
+  });
+}
+const LEFT = JOB ? "jobleft" : "left";
+function sizes() {
+  document.documentElement.style.setProperty("--left", load(LEFT, JOB ? 34 : 55) + "%");
+  document.documentElement.style.setProperty("--bottom", load("bottom", 40) + "%");
+}
+drag($("vsplit"), e => { const r = $("main").getBoundingClientRect();
+  keep(LEFT, Math.max(15, Math.min(85, 100 * (e.clientX - r.left) / r.width))); sizes(); });
+drag($("hsplit"), e => { const r = $("right").getBoundingClientRect();
+  keep("bottom", Math.max(10, Math.min(90, 100 * (r.bottom - e.clientY) / r.height))); sizes(); });
+sizes();
+
+// ── the list ───────────────────────────────────────────────────────────────
+function level(f) { return f >= .85 ? "l3" : f >= .6 ? "l2" : ""; }
+function label(r) {
+  if (r.kind == "thead")                                 // a parameter table's header: a click on a column sorts by it
+    return r.cols.map(([n, a, b], i) => (i ? esc(r.label.slice(r.cols[i - 1][2], a)) : "") +
+      `<span class="th" data-sort="${esc(n)}" data-tree="${esc(r.tree)}" title="sort by ${esc(n)}">${esc(r.label.slice(a, b))}</span>`).join("");
+  if (r.kind == "tset") return esc(r.label);
+  if ((r.kind == "proc" || r.kind == "run") && tab == "runs" && !r.tabled) {          // its machine first, in grey
+    const m = r.label.match(/^(\S+\s+)(.*)$/);
+    if (m) return `<span class="where">${esc(m[1])}</span>${esc(m[2])}`;
+  }
+  if (r.hits && r.hits.length) {
+    const hit = new Set(r.hits);
+    return [...r.label].map((c, i) => hit.has(i) ? `<span class="hit">${esc(c)}</span>` : esc(c)).join("");
+  }
+  return esc(r.label);
+}
+function rowHtml(r, i, at) {
+  const fold = r.open === null ? "" : r.open ? "▾" : "▸";
+  // a folder holding a run running says so after its name, not in the column of the runs' signs ( it is no run )
+  const busy = r.kind == "tnode" && r.mark == "run";
+  const sign = busy ? "" : SIGNS[r.mark] ? `<span class="sign m-${esc(r.mark)}">${SIGNS[r.mark]}</span>` :
+               r.kind == "thead" || r.kind == "tset" ? `<span class="sign"></span>` : "";   // ( a table's lines start alike )
+  const meters = r.meters.length ? `<span class="meters">${r.meters.map(([n, f]) =>
+      `<span class="meter"><span>${esc(n)}</span><span class="bar"><i class="${level(f)}" style="width:${Math.round(100 * f)}%"></i></span><b>${Math.round(100 * f)}%</b></span>`).join("")}</span>` : "";
+  const going = r.mark == "going" || greyed.has(r.key) ? " going" : "", many = marked.size > 1 && marked.has(r.key) ? " marked" : "";
+  const lv = r.level ? ` l-${esc(r.level)}` : "";
+  return `<div class="row ${esc(r.kind)}${lv}${i == at ? " sel" : ""}${many}${going}" data-key="${esc(r.key)}" data-i="${i}" style="padding-left:${14 + 18 * r.depth}px">` +
+         `<span class="fold">${fold}</span>${sign}<span class="label">${label(r)}${busy ? `<span class="busy m-run" title="a run runs under it">●</span>` : ""}</span>${meters}<span class="right">${esc(r.detail)}</span></div>`;
+}
+function drawList() {
+  const at = selIndex();
+  put($("list"), rows.map((r, i) => rowHtml(r, i, at)).join("") || `<div class="row note"><span class="label">nothing here</span></div>`);
+  document.querySelectorAll(".tab").forEach(b => b.classList.toggle("on", b.dataset.tab == tab));
+}
+function drawCounts(c) {
+  $("counts").innerHTML = `<span class="run ${c.running ? "on" : ""}">● ${c.running} running</span>` +
+    `<span class="wait ${c.waiting ? "on" : ""}">◌ ${c.waiting} waiting</span>` +
+    `<span>${c.machines} machines${c.off ? `, ${c.off} not watched` : ""}</span>`;
+}
+let stating = false, stateAgain = false, statedAt = 0;
+// the lists read again; the detail too when the row looked at is another one, or when `all` says so
+async function state(all) {
+  if (JOB) return all ? detail() : undefined;           // one run: nothing to list
+  if (stating) { stateAgain = stateAgain || (all ? "all" : true); return; }
+  stating = true; statedAt = Date.now();
+  const before = sel;
+  try {
+    const p = new URLSearchParams({tab, q: query, shown, folded: [...folded].join(","), opened: [...opened].join(","),
+                                   days: cacheDays, all: cacheAll ? 1 : 0, sel: sel || ""});
+    const got = await ask("/state?" + p);
+    const was = selIndex();
+    rows = got.rows; drawCounts(got.counts); kept = got.kept !== false;
+    // the row looked at is kept ( its key does not change as it ends ); gone all the same ( removed ), the cursor stays
+    // where it was rather than jumping to the top
+    if (!rows.some(r => r.key == sel))
+      sel = (was >= 0 && rows.length ? rows[Math.min(was, rows.length - 1)]
+             : rows.find(r => r.kind == "proc" || r.kind == "run" || r.kind == "machine") || rows[0] || {}).key || null;
+    // the same line as before ( of a run's two, the one nearest where the cursor was )
+    if (was >= 0) selAt = was;
+    selAt = selIndex();
+    if (marked.size) { const here = new Set(rows.map(r => r.key)); for (const k of [...marked]) if (!here.has(k)) marked.delete(k); }
+    drawList();
+    if (all || sel != before || !det) detail();
+  } catch (e) { say(e.message); } finally {
+    stating = false;
+    if (stateAgain) { const a = stateAgain == "all"; stateAgain = false; state(a); }
+  }
+}
+function choose(key, reveal = true, many = false, at = -1) {
+  if (!many && marked.size) { marked.clear(); if (key == sel) drawList(); }
+  if (key == sel && (at < 0 || at == selIndex())) return;
+  const same = key == sel;
+  sel = key; selAt = at >= 0 ? at : rows.findIndex(r => r.key == key);
+  if (same) { drawList(); if (reveal) document.querySelector("#list .row.sel")?.scrollIntoView({block: "nearest"}); return; } history.replaceState(null, "", "#" + encodeURIComponent(key || "")); det = null; dsel = -1;
+  closeView(); drawList(); detail(true);
+  if (reveal) document.querySelector("#list .row.sel")?.scrollIntoView({block: "nearest"});
+}
+function move(d) {
+  if (!rows.length) return;
+  const i = Math.max(0, Math.min(rows.length - 1, selIndex() + d));
+  choose(rows[i].key, true, false, i);
+}
+// Several rows chosen together ( ⇧↑ ⇧↓, ⇧-click: from the first one chosen; ⌘-click: one more or one less ), for d, D
+function markTo(key) {
+  if (!marked.size || anchor === null || !rows.some(r => r.key == anchor)) anchor = sel;
+  const i = rows.findIndex(r => r.key == anchor), j = rows.findIndex(r => r.key == key);
+  if (i < 0 || j < 0) return;
+  marked = new Set(rows.slice(Math.min(i, j), Math.max(i, j) + 1).map(r => r.key));
+  choose(key, true, true); drawList();
+}
+function extend(d) {
+  if (!rows.length) return;
+  markTo(rows[Math.max(0, Math.min(rows.length - 1, selIndex() + d))].key);
+}
+function markOne(key) {
+  if (!marked.size) { marked.add(sel); anchor = sel; }
+  marked.has(key) && marked.size > 1 ? marked.delete(key) : marked.add(key);
+  choose(key, false, true); drawList();
+}
+function toggle(r) {
+  if (r.kind == "more") { shown += 50; return refresh(); }
+  if (!r.fold) return;
+  if (r.fold.startsWith("t:")) {                          // a node of the runs' tree ( ADR 0023 ): folded until opened,
+    if (r.open) { opened.delete(r.fold); folded.add(r.fold); hideUnder(r); }   // one that holds a run running open until folded
+    else { folded.delete(r.fold); opened.add(r.fold); }
+    keep("opened", [...opened]); keep("folded", [...folded]); return refresh();
+  }
+  const inOpened = r.kind == "group" || r.kind == "centries", set = inOpened ? opened : folded;
+  set.has(r.fold) ? set.delete(r.fold) : set.add(r.fold); keep(inOpened ? "opened" : "folded", [...set]); refresh();
+}
+// a node folded with the row looked at under it: the cursor goes to the node ( else the page would keep it shown )
+function hideUnder(r) {
+  const i = rows.indexOf(r), j = selIndex();
+  if (i < 0 || j <= i) return;
+  for (let k = i + 1; k <= j; k++) if (rows[k].depth <= r.depth) return;
+  sel = r.key; selAt = i; history.replaceState(null, "", "#" + encodeURIComponent(sel)); det = null; dsel = -1; closeView();
+}
+function fold(unfold) {
+  const i = selIndex(), r = rows[i];
+  if (!r) return;
+  if (r.open !== null && r.open != unfold) return toggle(r);
+  if (!unfold && r.open === null) {
+    for (let j = i - 1; j >= 0; j--) if (rows[j].open !== null && (rows[j].depth < r.depth || r.depth == 0)) return choose(rows[j].key);
+  } else if (unfold && r.open) move(1);
+}
+
+// ── the detail ─────────────────────────────────────────────────────────────
+const ANSI = /\x1b\[([0-9;]*)m/g;
+const OSC = /\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g;    // what a terminal reads and shows nothing of ( `errand.row`'s mark )
+function ansi(text) {                                   // the program's colours, as spans
+  text = String(text ?? "").replace(OSC, "");
+  let out = "", cls = [], last = 0, m;
+  const flush = s => { if (s) out += cls.length ? `<span class="${cls.join(" ")}">${esc(s)}</span>` : esc(s); };
+  ANSI.lastIndex = 0;
+  while ((m = ANSI.exec(text))) {
+    flush(text.slice(last, m.index)); last = ANSI.lastIndex;
+    for (const c of (m[1] || "0").split(";").map(Number)) {
+      if (c == 0) cls = []; else if (c >= 1 && c <= 4) cls.push("a" + c);
+      else if (c >= 30 && c <= 37) cls = cls.filter(x => x[0] != "c").concat("c" + (c - 30));
+      else if (c >= 90 && c <= 97) cls = cls.filter(x => x[0] != "c").concat("c" + (c - 90));
+    }
+  }
+  flush(text.slice(last)); return out;
+}
+function outputs() { return det ? det.rows.filter(r => r.kind == "output") : []; }
+function pathOf(o) { return o.path || (det && det.console); }
+function fileUrl(path, download) { return "/file?" + new URLSearchParams({key: sel, path, ...(download ? {download: 1} : {})}); }
+function isPath(v) { return /^\/\S*$/.test(v); }
+function consoleHtml(rs) {
+  let h = "", lines = [];
+  const close = () => { if (lines.length) h += `<div class="lines">${lines.join("\n")}</div>`; lines = []; };
+  for (const r of rs) {
+    if (r.kind == "out") { lines.push(ansi(r.label.replace(/^  │ /, ""))); continue; }
+    close();
+    if (r.kind == "chead") h += `<div class="chead">${esc(r.label)}</div>`;
+    else if (r.kind == "cend") { const m = r.label.match(/^\s*╰ (\S+)(.*)$/);
+      h += `<div class="cend">╰ <span class="st ${esc(r.status)}">${esc(m ? m[1] : r.status)}</span>${esc(m ? m[2] : "")}</div>`; }
+    else if (r.label) h += `<div class="${r.kind == "broken" ? "broken" : "note"}">${esc(r.label.trim())}</div>`;
+  }
+  close(); return h;
+}
+const SVG = d => `<svg class="i" viewBox="0 0 16 16" aria-hidden="true">${d}</svg>`;
+const ICONS = {
+  machine: SVG('<rect x="1.5" y="2.5" width="13" height="8.5" rx="1.2"/><path d="M5.5 14h5M8 11v3"/>'),
+  env: SVG('<path d="M8 1.6 14 4.6v6.8L8 14.4 2 11.4V4.6z"/><path d="M2 4.6 8 7.6l6-3M8 7.6v6.8"/>'),
+  clock: SVG('<circle cx="8" cy="8" r="6.2"/><path d="M8 4.5V8l2.4 1.6"/>'),
+  took: SVG('<path d="M4 1.8h8M4 14.2h8M5 1.8c0 3.4 6 3.4 6 6.2s-6 2.8-6 6.2M11 1.8c0 3.4-6 3.4-6 6.2s6 2.8 6 6.2"/>'),
+  folder: SVG('<path d="M1.8 4.2c0-.7.5-1.2 1.2-1.2h3l1.5 1.6h5.5c.7 0 1.2.5 1.2 1.2v6.4c0 .7-.5 1.2-1.2 1.2H3c-.7 0-1.2-.5-1.2-1.2z"/>'),
+  run: SVG('<path d="M1.8 4.2c0-.7.5-1.2 1.2-1.2h3l1.5 1.6h5.5c.7 0 1.2.5 1.2 1.2v6.4c0 .7-.5 1.2-1.2 1.2H3c-.7 0-1.2-.5-1.2-1.2z"/><path d="M7 7.2v3.6l3-1.8z"/>'),
+  code: SVG('<path d="M9.5 1.8H4.2c-.7 0-1.2.5-1.2 1.2v10c0 .7.5 1.2 1.2 1.2h7.6c.7 0 1.2-.5 1.2-1.2V5.3z"/><path d="M9.5 1.8v3.5H13M6.6 8.2 5.2 9.8l1.4 1.6M9.4 8.2l1.4 1.6-1.4 1.6"/>'),
+  file: SVG('<path d="M9.5 1.8H4.2c-.7 0-1.2.5-1.2 1.2v10c0 .7.5 1.2 1.2 1.2h7.6c.7 0 1.2-.5 1.2-1.2V5.3z"/><path d="M9.5 1.8v3.5H13"/>'),
+  text: SVG('<path d="M9.5 1.8H4.2c-.7 0-1.2.5-1.2 1.2v10c0 .7.5 1.2 1.2 1.2h7.6c.7 0 1.2-.5 1.2-1.2V5.3z"/><path d="M9.5 1.8v3.5H13M5.6 8.5h4.8M5.6 11h3.4"/>'),
+  console: SVG('<rect x="1.5" y="2.5" width="13" height="11" rx="1.2"/><path d="m4.5 6.3 2 1.7-2 1.7M8 10.2h3.5"/>'),
+  image: SVG('<rect x="1.8" y="2.5" width="12.4" height="11" rx="1.2"/><circle cx="5.6" cy="6" r="1.2"/><path d="m2 12 3.8-3.6 2.6 2.4 2-1.8 3.8 3.2"/>'),
+  page: SVG('<circle cx="8" cy="8" r="6.2"/><path d="M1.8 8h12.4M8 1.8c1.8 2 1.8 10.4 0 12.4M8 1.8c-1.8 2-1.8 10.4 0 12.4"/>'),
+  host: SVG('<rect x="2" y="2" width="12" height="5" rx="1"/><rect x="2" y="9" width="12" height="5" rx="1"/><path d="M4.5 4.5h.01M4.5 11.5h.01"/>'),
+};
+function iconOf(name) {
+  if (name == "console") return ICONS.console;
+  if (/\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(name)) return ICONS.image;
+  if (/\.(html?|pdf)$/i.test(name)) return ICONS.page;
+  if (/\.(txt|log|ya?ml|json|csv|md|out|err)$/i.test(name)) return ICONS.text;
+  if (/\.(py|cpp|hpp|h|c|cu|cuh|sh|js|ts|rs|jl)$/i.test(name)) return ICONS.code;
+  return ICONS.file;
+}
+function chip(icon, text, data, title) {
+  const shownNow = data && data.path && view && view.path == data.path;
+  const attrs = data ? Object.entries(data).map(([k, v]) => `data-${k}="${esc(v)}"`).join(" ") : "";
+  return `<span class="chip${data ? " click" : ""}${shownNow ? " shown" : ""}" ${attrs} title="${esc(title || text)}">${ICONS[icon]}<span>${esc(text)}</span></span>`;
+}
+function hhmm(t, now) {
+  const d = new Date(t * 1000), n = new Date(now * 1000), two = x => String(x).padStart(2, "0");
+  const time = `${two(d.getHours())}:${two(d.getMinutes())}`;
+  return d.toDateString() == n.toDateString() ? time : `${d.toLocaleDateString(undefined, {day: "numeric", month: "short"})} ${time}`;
+}
+function badgeOf(f) {
+  const s = f.status || f.state || "";
+  const tone = /^PASS/.test(s) ? "ok" : /^(FAIL|ERROR|TIMEOUT)/.test(s) ? "bad" : /^running/.test(s) ? "run" : /^waiting/.test(s) ? "wait" : "";
+  const word = /^waiting/.test(s) ? "waiting" : s.split(/[\s:]/)[0];
+  return word ? `<span class="badge ${tone}" title="${esc(s)}">${{ok: "✓ ", bad: "✗ ", run: "● ", wait: "◌ "}[tone] || ""}${esc(word)}</span>` : "";
+}
+// a run, a process: the badge, then what it is as one grid of icons, each that can be acted on, clickable
+const COVERED = new Set(["machine", "project", "what", "env", "status", "state", "started", "took", "leaf"]);
+function runHead(f) {
+  const what = f.what || det.title, name = what.includes("::") ? what.split("::").slice(1).join("::") : what;
+  let h = `<div class="head">${badgeOf(f)}<h2 title="${esc(what)}">${esc(name)}</h2></div><div class="chips">`;
+  const machine = det.machine || (f.machine || "").split(" ")[0];
+  if (machine) h += chip("machine", f.machine || machine, {machine}, "the machine: its row, in the machines tab");
+  if (f.env) h += chip("env", f.env, {env: f.env}, "its environment: every run in it ( the filter )");
+  const nowThere = det.now + (Date.now() / 1000 - (det.at || Date.now() / 1000));      // ( its clock, ticking here )
+  const took = f.took || (det.started && /^(running|waiting)/.test(f.state || "") ? ago(nowThere - det.started) + " so far" : "");
+  if (took) h += chip("took", took, null, (f.took ? "how long it took" : "how long it runs") +
+                     (det.started ? ` · started ${hhmm(det.started, det.now)}, ${f.started || ""}` : ""));
+  h += `<span class="br"></span>`;                       // where it is, on a line of its own
+  if (f.project) h += chip("folder", f.project.split("/").pop(), {path: f.project, dir: 1}, f.project);
+  if (det.file) h += chip("code", det.file.split("/").pop(), {path: det.file}, det.file);     // where the server found it
+  if (f.leaf) h += chip("run", "run", {path: f.leaf, dir: 1}, f.leaf);
+  return h + `</div>`;
+}
+function factHtml(r) {
+  if (r.k == "said" && det.saidAt && !det.duration) r = {k: "said", v: ago(det.now + Date.now() / 1000 - det.at - det.saidAt) + " ago"};    // ( ticking here )
+  const v = isPath(r.v) ? `<span class="path${view && view.path == r.v ? " shown" : ""}" data-path="${esc(r.v)}" title="click: show · double-click: open · right-click: more">${esc(r.v)}</span>` : esc(r.v);
+  return `<span class="k">${esc(r.k)}</span><span class="v">${v}</span>`;
+}
+// The folders of a run, as a tree: each folded until it is opened, listed then, and again as the run moves
+let treeOpen = new Set(), treeCur = null;
+const tree = new Map();                                  // path -> { entries, error, at }
+async function listDir(path) {
+  const key = sel, t = tree.get(path) || {};
+  if (t.asking) return;
+  t.asking = true; tree.set(path, t);
+  try { t.entries = (await ask("/ls?" + new URLSearchParams({key, path}))).entries; t.error = null; }
+  catch (e) { t.error = e.message; }
+  t.asking = false; t.at = Date.now();
+  if (key == sel) drawDetail();
+}
+function retree() {                                      // what is open, listed again: the run moved
+  for (const p of treeOpen) if (p.startsWith(det.leaf + "/") && Date.now() - ((tree.get(p) || {}).at || 0) > 1000) listDir(p);
+}
+function toggleTree(path, on = !treeOpen.has(path)) {
+  if (on) { treeOpen.add(path); listDir(path); } else treeOpen.delete(path);
+  drawDetail();
+}
+function insideHtml(path, depth) {
+  const t = tree.get(path), pad = `style="padding-left:${8 + 16 * depth}px"`;
+  if (!t || !t.entries) return `<div class="out in note" ${pad}>${t && t.error ? esc(t.error) : "reading…"}</div>`;
+  if (!t.entries.length) return `<div class="out in note" ${pad}>empty</div>`;
+  return t.entries.map(e => {
+    const p = path + "/" + e.name, on = e.dir && treeOpen.has(p);
+    return `<div class="out in${e.dir ? " dir" : ""}${view && view.path == p ? " sel" : ""}${treeCur == p ? " cur" : ""}" data-path="${esc(p)}" data-dir="${e.dir ? 1 : ""}" title="${esc(p)}" ${pad}>` +
+      `<span class="tw"${e.dir ? ` data-tree="${esc(p)}"` : ""}>${e.dir ? (on ? "▾" : "▸") : ""}</span>` +
+      `<span class="n">${e.dir ? ICONS.folder : iconOf(e.name)}${esc(e.name)}${e.dir ? "/" : ""}</span><span class="d">${e.dir ? "" : size(e.size)}</span></div>` +
+      (on ? insideHtml(p, depth + 1) : "");
+  }).join("");
+}
+function outputHtml(rs) {
+  let h = "", n = 0;
+  const said = det.rows.filter(r => r.kind == "out" && !/^\s*│ \( (no output|nothing yet) \)$/.test(r.label)).length, empties = [];
+  const lines = said ? said + (said == 1 ? " line" : " lines") : "empty";
+  for (const r of rs) {
+    const i = n++, p = pathOf(r), size = (r.detail || "").split("  ")[0];
+    if (r.path && size == "0 B") { empties.push([i, r, p]); continue; }
+    const shownNow = view && (r.path ? view.path == p : view.console);
+    const on = r.dir && treeOpen.has(p);
+    h += `<div class="out${shownNow ? " sel" : ""}${r.dir && !r.look ? " dir" : ""}${treeCur && treeCur == p ? " cur" : ""}" data-out="${i}" data-path="${esc(p || "")}" data-dir="${r.dir ? 1 : ""}"${r.look ? ` data-look="1"` : ""}${r.path ? "" : ` data-console="1"`} title="${esc(p || "")}">` +
+         `<span class="tw"${r.dir ? ` data-tree="${esc(p)}"` : ""}>${r.dir ? (on ? "▾" : "▸") : ""}</span>` +
+         `<span class="n">${r.look == "static" ? ICONS.page : r.dir ? ICONS.folder : iconOf(r.label)}${esc(r.label)}${r.dir && !r.look ? "/" : ""}</span><span class="d">${r.path ? (r.look == "static" && !r.url ? "on its way" : esc(size)) : lines}</span></div>` +
+         (on ? insideHtml(p, 1) : "");
+  }
+  if (empties.length) h += `<div class="out empty"><span class="n">${ICONS.file}${empties.map(([i, r, p]) =>
+      `<span class="e${view && view.path == p ? " sel" : ""}" data-out="${i}" data-path="${esc(p)}">${esc(r.label)}</span>`).join(", ")}</span><span class="d">empty</span></div>`;
+  return h;
+}
+function drawDetail() {
+  const d = $("detail");
+  if (!sel) { put(d, `<span class="note">choose a row</span>`); return; }
+  if (!det) { put(d, `<span class="note">reading…</span>`); return; }
+  const can = det.can || {}, row = rows.find(r => r.key == sel);
+  const facts = det.rows.filter(r => r.kind == "plain" && r.k !== undefined), f = Object.fromEntries(facts.map(r => [r.k, r.v]));
+  const isWork = det.kind == "proc" || det.kind == "run";
+  let h = isWork ? runHead(f) : `<h2>${esc(det.title)}</h2>`;
+  let tools = "";
+  if (can.kill) tools += `<button class="danger" data-act="kill">${row && (row.kind == "machine" || row.kind == "broken") ? "kill all" : "kill"}<kbd>k</kbd></button>`;
+  if (can.watch) tools += `<button data-act="watch">${can.watch}<kbd>a</kbd></button>`;
+  for (const how of can.caches || []) tools += `<button class="danger" data-act="cache_remove" data-how="${how}">${CACHE_ACTS[how][0]}<kbd>${CACHE_ACTS[how][1]}</kbd></button>`;
+  if (can.hold) tools += `<button data-act="cache_hold">this machine holds it<kbd>h</kbd></button>`;
+  if (can.runs && row && row.mark == "there") tools += `<button data-act="runs_fetch">bring back<kbd>b</kbd></button>`;
+  if (can.runs) tools += `<button class="danger" data-act="runs_remove" data-how="latest">keep only the latest<kbd>D</kbd></button>` +
+                         `<button class="danger" data-act="runs_remove" data-how="all">remove<kbd>d</kbd></button>`;
+  if (can.caches) tools += `<button data-days="1">unused after ${cacheDays} d<kbd>n</kbd></button><button data-all="1">${cacheAll ? "dead and unused only" : "every entry"}<kbd>v</kbd></button>`;
+  if (can.check) tools += `<button data-act="machine_check" title="what errand believes of it, against what is there">check</button>`;
+  if (can.rename) tools += `<button data-act="rename">rename machine<kbd>r</kbd></button>`;
+  if (can.forget) tools += `<button data-act="forget">forget<kbd>f</kbd></button>`;
+  if (isWork && !JOB) tools += `<a class="btn" href="/job?${esc(new URLSearchParams({key: sel}))}" target="_blank" rel="noopener" title="this run as a page of its own: its outputs left, the one chosen right">page ↗</a>`;
+  if (tools) h += `<div class="tools">${tools}</div>`;
+  const shownFacts = facts.filter(r => !RARE.has(r.k) && !(isWork && COVERED.has(r.k)));
+  const rare = facts.filter(r => RARE.has(r.k) || (isWork && COVERED.has(r.k) && isPath(r.v)) || (isWork && r.k == "what"))
+                    .concat(isWork && det.started ? [{k: "started", v: `${hhmm(det.started, det.now)} · ${f.started || ""}`}] : []);
+  if (shownFacts.length) h += `<div class="facts">${shownFacts.map(factHtml).join("")}</div>`;
+  if (rare.length) h += (showMore ? `<div class="facts">${rare.map(factHtml).join("")}</div>` : "") +
+    `<div class="more" id="more">${showMore ? "▾ less" : `▸ more: ${esc(rare.map(r => r.k).join(", "))}`}</div>`;
+  // where else this result is: the machine it ran on, the copies of its views -- each removed from there on demand
+  if (det.copies && det.copies.length) h += `<h3>also on</h3><div class="copies">` + det.copies.map(c =>
+      `<span class="k">${esc(c.machine)}</span><span>${esc(c.what)}${c.state && c.state != "there" ? ` <span class="k">( ${esc(c.state == "removing" ? "its removal waits for the machine" : "being made")} )</span>` : ""}</span>` +
+      `<button class="danger" data-act="copy_remove" data-copy="${esc(c.id)}">remove there</button>`).join("") + `</div>`;
+  const outs = [];
+  for (const r of det.rows) {
+    if (r.kind == "head") { if (outs.length) { h += outputHtml(outs); outs.length = 0; } h += `<h3>${esc(r.label)}</h3>`; continue; }
+    if (r.kind == "output") { outs.push(r); continue; }
+    if (outs.length) { h += outputHtml(outs); outs.length = 0; }
+  }
+  if (outs.length) h += outputHtml(outs);
+  if (!isWork) h += consoleHtml(consoleRows());              // what else the detail says ( a note, an error )
+  const top = d.scrollTop, stick = d.scrollTop + d.clientHeight >= d.scrollHeight - 4;
+  if (put(d, h)) d.scrollTop = stick ? d.scrollHeight : top;           // the end of a console that grows stays in view
+}
+let detailing = null, detailAgain = false;
+async function detail(now) {
+  if (!sel) return drawDetail();
+  if (detailing === sel && !now) { detailAgain = true; return; }
+  const key = detailing = sel;
+  try {
+    const got = await ask("/detail?" + new URLSearchParams({key}));
+    if (key != sel) return;
+    const was = det && det.leaf;
+    det = got; det.at = Date.now() / 1000;
+    if (was && det.leaf && was != det.leaf) moved(was, det.leaf);      // it came back: what is shown of it is here now
+    retree(); drawDetail();
+    if (JOB) document.title = (ONLY && JOBQ.get("path") ? JOBQ.get("path").split("/").pop() + " · " : "") + det.title + " · errand";
+    if (jobPath && jobPath == det.console) { showConsole(); jobPath = null; }     // the console, as the page draws it
+    else if (jobPath) { show(jobPath, false); jobPath = null; }
+    else if (!view || view.key != sel) autoView();
+    else if (view.console) { if (!consoleBig[sel] && looks().length) autoView(); else showConsole(); }
+    else if (view.auto && looks().length && looks()[0].path != view.path) autoView();
+    else show(view.path, view.dir, true);
+    drawStrip();
+  } catch (e) { if (key == sel) { det = {title: e.message, rows: [], can: {}}; drawDetail(); } } finally {
+    if (detailing === key) { detailing = null; if (detailAgain) { detailAgain = false; detail(); } }
+  }
+}
+function moved(from, to) {
+  const at = p => p && p.startsWith(from + "/") ? to + p.slice(from.length) : p;
+  if (view && view.path) view.path = at(view.path);
+  treeOpen = new Set([...treeOpen].map(at)); treeCur = at(treeCur); viewed.forEach(v => v.path = at(v.path));
+  tree.clear();
+}
+
+// ── the pane below: a file, a folder ───────────────────────────────────────
+let viewed = [];                                        // what the pane showed before, the last one last
+function back() {
+  const v = viewed.pop();
+  if (!v) return askConsole();
+  v.console ? showConsole() : show(v.path, v.dir, false, true);
+}
+function closeView() { viewed = []; treeCur = null; view = null; put($("vh"), ""); put($("vb"), ""); }
+function consoleRows() {                                // what the detail rows say after the outputs: the console
+  if (!det) return [];
+  let after = false, heads = 0;
+  const rest = [];
+  for (const r of det.rows) {
+    if (r.kind == "plain" && r.k !== undefined) continue;
+    if (r.kind == "head") { heads++; continue; }
+    if (r.kind == "output") { after = true; continue; }
+    if (after || !heads) rest.push(r);
+  }
+  return rest;
+}
+function showConsole() { view = {key: sel, console: true}; drawView(); drawDetail(); }
+// ── the run's dashboard ( grill/dashboard ): what the run declared to look at, in big, the console in a strip below ──
+const consoleBig = {};                                  // run key -> the console asked in big ( a click on it )
+function askConsole() { consoleBig[sel] = true; showConsole(); }
+function looks() {                                      // ready, in the order: a page served as it is first, then the latest
+  if (!det) return [];
+  return det.rows.filter(r => r.kind == "output" && r.look && r.ready && r.path)
+    .sort((a, b) => (b.look == "static") - (a.look == "static") || (b.t || 0) - (a.t || 0));
+}
+function autoView() {
+  const L = looks();
+  if (L.length && !consoleBig[sel]) { show(L[0].path, false); if (view) view.auto = true; }
+  else showConsole();
+}
+const isRun = () => !!det && (det.kind == "proc" || det.kind == "run");
+function dashSizes() { document.documentElement.style.setProperty("--dtop", load("dashTop", 70) + "%"); }
+function dashBody() {                                   // where the big part goes: the dashboard's top while a run shows
+  const vb = $("vb");                                   // something else than its console, the whole pane otherwise
+  if (isRun() && view && !view.console) {
+    if (!$("dtop")) {                                   // made once: what changes is put in its parts ( a frame never reloads )
+      vb.innerHTML = `<div class="dash"><div id="dtop"><div id="dtabs"></div><div id="dbody"></div></div>` +
+        `<div class="split h" id="dsplit" title="drag"></div><div id="dcons"></div></div>`; vb._html = null;
+      drag($("dsplit"), e => { const r = vb.getBoundingClientRect();
+        keep("dashTop", Math.max(15, Math.min(92, 100 * (e.clientY - r.top) / r.height))); dashSizes(); });
+      $("dcons").addEventListener("click", e => { if (e.target.closest("[data-fold]")) { keep("consFold", !load("consFold", false)); drawStrip(); } });
+      $("dtabs").addEventListener("click", e => { const t = e.target.closest("[data-look]"); if (t) show(t.dataset.look, false); });
+      dashSizes();
+    }
+    return $("dbody");
+  }
+  if ($("dtop")) { vb.innerHTML = ""; vb._html = null; }
+  return vb;
+}
+function drawStrip() {                                  // the tabs and the console strip, while the dashboard is there
+  const c = $("dcons"); if (!c) return;
+  const L = looks(), folded = load("consFold", false), rs = consoleRows();
+  put($("dtabs"), L.length > 1 ? L.map(r => `<span class="dtab${view && view.path == r.path ? " on" : ""}" data-look="${esc(r.path)}" title="${esc(r.path)}">${esc(r.label)}</span>`).join("") : "");
+  c.classList.toggle("folded", folded);
+  const stick = c.scrollTop + c.clientHeight >= c.scrollHeight - 4;
+  const head = `<div class="dchead"><button data-fold="1" title="fold / unfold the console">${folded ? "▸" : "▾"}</button>console</div>`;
+  if (put(c, head + consoleHtml(folded ? rs.filter(r => r.kind == "out").slice(-1) : rs)) && (stick || folded)) c.scrollTop = c.scrollHeight;
+}
+async function show(path, dir, again, backed) {
+  if (!path || !sel) return;
+  const key = sel;
+  if (!again) { consoleBig[key] = false; treeCur = null; }
+  if (!again && !backed && view && view.path != path && view.key == key) {
+    viewed.push({path: view.path, dir: view.dir, console: view.console});
+    if (viewed.length > 50) viewed.shift();
+  }
+  const r = outputs().find(r => r.path == path);
+  if (r && r.look == "static" && !r.url) {                // brought here first: shown as soon as it is
+    if (!view || view.path != path || !view.waiting) { view = {key, path, waiting: true}; $("right").classList.add("viewing"); drawView(); drawDetail(); }
+    return;
+  }
+  if (viewUrl(path)) {                                    // its own page, in a frame: it reads what is beside it there
+    if (!view || view.path != path || view.url != viewUrl(path)) { view = {key, path, url: viewUrl(path)}; $("right").classList.add("viewing"); drawView(); drawDetail(); }
+    return;
+  }
+  if (!again || !view || view.path != path) { view = {key, path, dir, got: null}; $("right").classList.add("viewing"); drawView(); drawDetail(); }
+  try {
+    let got;
+    if (dir) got = {dir: await ask("/ls?" + new URLSearchParams({key, path}))};
+    else {
+      try { got = {file: await ask("/peek?" + new URLSearchParams({key, path, ...(isJson(path) ? {size: 4 << 20} : ONLY ? {size: 1 << 20} : {})}))}; }
+      catch (e) { if (/directory/i.test(e.message)) { view.dir = true; return show(path, true, again); } throw e; }
+    }
+    if (view && view.path == path) { view.got = got; drawView(); }
+  } catch (e) { if (view && view.path == path) { view.got = {error: e.message}; drawView(); } }
+}
+function vbuttons(path, dir) {
+  const here = det && det.here;
+  return (dir ? "" : `<a class="btn" href="${esc(tabUrl(path))}" target="_blank" rel="noopener" title="open in a tab">↗</a>` +
+          `<button data-v="edit" title="in an editor ( e )">✎</button>` +
+          `<a class="btn" href="${esc(fileUrl(path, true))}" title="download ( d )">⤓</a>`) +
+         (here ? `<button data-v="reveal" title="in the Finder">${dir ? "open folder" : "show in folder"}</button>` : "") +
+         `<button data-v="copy" title="copy the path">copy path</button>` +
+         (view && view.got && view.got.file && asJson(view) ? jsonButtons() : "") +
+         (view && view.console ? "" : `<button data-v="close" title="back to the console ( esc )">×</button>`);
+}
+// where a file is, from its run's directory: each folder on the way is a click back to it
+function crumbs(path) {
+  const leaf = det && det.leaf, name = path.split("/").pop();
+  if (!leaf || !path.startsWith(leaf + "/")) return `<bdi>${esc(path.slice(0, path.lastIndexOf("/")))}/<b>${esc(name)}</b></bdi>`;
+  const parts = path.slice(leaf.length + 1).split("/");
+  let at = leaf, h = `<span class="crumb" data-path="${esc(leaf)}" data-dir="1" title="${esc(leaf)}">run</span>`;
+  parts.forEach((p, i) => { at += "/" + p;
+    h += " / " + (i == parts.length - 1 ? `<b>${esc(p)}</b>` : `<span class="crumb" data-path="${esc(at)}" data-dir="1" title="${esc(at)}">${esc(p)}</span>`); });
+  return `<bdi>${h}</bdi>`;
+}
+function drawView() {
+  if (!view) return;
+  const v = $("view"), body = dashBody();
+  if (view.console) {                                     // the console: what is shown when nothing else is
+    const isWork = det && (det.kind == "proc" || det.kind == "run"), path = det && det.console;
+    const stick = v.scrollTop + v.clientHeight >= v.scrollHeight - 4;
+    put($("vh"), `<div class="vhead"><span class="where"><b>console</b>${path ? " · " + esc(path.split("/").pop()) : ""}</span>` +
+      (path ? vbuttons(path, false) : "") + `</div>`);
+    if (put($("vb"), isWork ? consoleHtml(consoleRows()) : `<div class="note">a run's console shows here</div>`) && stick)
+      v.scrollTop = v.scrollHeight;                     // the end of a console that grows stays in view
+    return;
+  }
+  const {path, dir, got} = view, name = path.split("/").pop();
+  const parent = path.slice(0, path.lastIndexOf("/")) || "/";
+  const backB = viewed.length ? `<button data-v="back" title="what was shown before ( backspace )">←</button>` : "";
+  if (view.waiting) {
+    put($("vh"), `<div class="vhead">${backB}<span class="where"><b>${esc(name)}</b></span><button data-v="close" title="back to the console ( esc )">×</button></div>`);
+    put(body, `<div class="note">${esc(name)} is brought here from ${esc(det.machine || "its machine")}: it opens as soon as it is…</div>`);
+    drawStrip();
+    return;
+  }
+  if (view.url) {
+    put($("vh"), `<div class="vhead">${backB}<span class="where" title="${esc(path)}">${crumbs(path)}</span>` +
+      `<a class="btn" href="${esc(view.url)}" target="_blank" rel="noopener" title="open in a tab">↗</a>` +
+      `<button data-v="copy" title="copy the path">copy path</button><button data-v="close" title="back to the console ( esc )">×</button></div>`);
+    put(body, `<div class="peek" style="height:100%"><iframe src="${esc(view.url)}"></iframe></div>`);
+    drawStrip();
+    return;
+  }
+  put($("vh"), `<div class="vhead">${backB}<span class="where" title="${esc(path)}">${crumbs(path)}${dir ? "/" : ""}</span>${vbuttons(path, dir)}</div>`);
+  let h = "";
+  if (!got) h += `<div class="note">reading…</div>`;
+  else if (got.error) h += `<div class="broken">${esc(got.error)}</div>`;
+  else if (got.dir) {
+    h += `<div class="ent dir" data-path="${esc(parent)}" data-dir="1"><span class="n">..</span><span></span><span></span></div>`;
+    h += got.dir.entries.map(e => `<div class="ent${e.dir ? " dir" : ""}" data-path="${esc(path + "/" + e.name)}" data-dir="${e.dir ? 1 : ""}" title="click: show · double-click: open · right-click: more">` +
+         `<span class="n">${esc(e.name)}${e.dir ? "/" : ""}</span><span class="s">${e.dir ? "" : size(e.size)}</span><span class="a">${ago(e.age)}</span></div>`).join("")
+         || `<div class="note">empty</div>`;
+  } else {
+    const f = got.file, url = esc(fileUrl(path) + "&v=" + f.size);    // read again when it changed
+    if (f.kind == "image") h += `<div class="peek"><img src="${url}" alt="${esc(name)}"></div>`;
+    else if (f.kind == "page") h += `<div class="peek" style="height:100%"><iframe sandbox="allow-scripts allow-popups allow-downloads" src="${url}"></iframe></div>`;
+    else if (f.kind == "binary") h += `<div class="note">binary, ${size(f.size)}: double-click opens it</div>`;
+    else if (asJson(view)) h += jsonHtml(view);
+    else h += (f.text && !f.text.includes("\x1b[") && lang(name) ? `<div class="code">${highlight(f.text, lang(name))}</div>`
+                                                                    : `<div class="lines">${ansi(f.text) || "( empty )"}</div>`) + (f.more ? `<div class="note">┆ … ${size(f.more)} more ( double-click: all of it )</div>` : "");
+  }
+  const stick = v.scrollTop > 0 && v.scrollTop + v.clientHeight >= v.scrollHeight - 4;
+  if (put(body, h) && stick) v.scrollTop = v.scrollHeight;   // a file that grows, read from its end: stays there
+  drawStrip();
+}
+// open: what the hand expects of a double-click -- a page or an image in a tab, a text in an editor, a folder in the Finder
+// a view opened as it is ( `errand.Static`, ADR 0017 ): its own page, served beside this one ( `web.static` )
+function viewUrl(path) { const r = det && det.rows.find(r => r.kind == "output" && r.path == path && r.url); return r ? r.url : null; }
+function open(path, dir) {
+  if (!path) return say("no output yet");
+  if (viewUrl(path)) return openTab(viewUrl(path));
+  if (dir) return det && det.here ? act("reveal", {path}) : show(path, true);
+  if (OPENED_IN_A_TAB.test(path)) return openTab(fileUrl(path));
+  if (det && det.here) return act("edit", {path});
+  openTab(tabUrl(path));
+}
+// a tab: a page, an image, a pdf as they are; a text in the job's page, highlighted
+function tabUrl(path) { return viewUrl(path) || (OPENED_IN_A_TAB.test(path) ? fileUrl(path) : "/job?" + new URLSearchParams({key: sel, path, only: 1})); }
+function openTab(url) {                                 // a link followed: what popup blockers let through
+  const a = document.createElement("a"); a.href = url; a.target = "_blank"; a.rel = "noopener";
+  document.body.appendChild(a); a.click(); a.remove();
+}
+function vAction(what, path, dir) {
+  if (what == "tab") openTab(tabUrl(path));
+  else if (what == "edit") act("edit", {path});
+  else if (what == "download") location.href = fileUrl(path, true);
+  else if (what == "reveal") act("reveal", {path});
+  else if (what == "copy") navigator.clipboard.writeText(path).then(() => say("copied: " + path), () => say(path));
+  else if (what == "show") show(path, dir);
+  else if (what == "open") open(path, dir);
+  else if (what == "close") askConsole();
+  else if (what == "back") back();
+  else if (what == "raw") { keep("jsonRaw", !load("jsonRaw", false)); drawView(); }
+  else if (what == "unfold" || what == "fold") { jsonAll.set(path, what); jsonTurned.delete(path); drawView(); }
+}
+function lines() { return [...document.querySelectorAll("#detail .out[data-path]:not(.empty), #detail .out .e")]; }
+function pick(n) {                                       // an output chosen with the keys: shown below; a folder: where the keys are
+  const os = lines(); if (!os.length) return;
+  const o = os[Math.max(0, Math.min(os.length - 1, n))];
+  if (o.dataset.dir && !o.dataset.look) { treeCur = o.dataset.path; drawDetail(); }
+  else o.dataset.console ? askConsole() : show(o.dataset.path, false);
+  document.querySelector("#detail .out.cur, #detail .out.sel, #detail .out .e.sel")?.scrollIntoView({block: "nearest"});
+}
+// the output shown below is the one chosen: one place says it, the keys move from it ( a folder, when they are on one )
+function shownIndex() {
+  return lines().findIndex(o => treeCur ? o.dataset.path == treeCur : view && (o.dataset.console ? view.console : !view.console && view.path == o.dataset.path));
+}
+function foldOutput(on) {                                // → ← in the detail: the folder the keys are on, or what holds the file
+  const o = lines()[shownIndex()]; if (!o) return;
+  const p = o.dataset.path;
+  if (o.dataset.dir && (on || treeOpen.has(p))) return toggleTree(p, on);
+  const up = p && p.slice(0, p.lastIndexOf("/"));
+  if (!on && up && treeOpen.has(up)) { treeCur = up; drawDetail(); }
+}
+function chosenPath() { return view && !view.dir && !view.console ? view.path : det && det.console; }
+
+// ── colours of a source ────────────────────────────────────────────────────
+// a few languages, by their names; enough to read a script, a config, a record -- not a compiler
+const KW = {
+  py: "False None True and as assert async await break class continue def del elif else except finally for from global if import in is lambda nonlocal not or pass raise return try while with yield match case self",
+  sh: "if then else elif fi for while until do done case esac function in return export local set exit source",
+  c: "auto bool break case catch char class const constexpr continue default delete do double else enum explicit extern false float for friend if inline int long namespace new nullptr operator private protected public return short signed sizeof static struct switch template this throw true try typedef typename union unsigned using virtual void volatile while __global__ __device__ __host__",
+  js: "async await break case catch class const continue default delete do else export extends false finally for function if import in instanceof let new null return super switch this throw true try typeof undefined var void while yield of",
+  yaml: "true false null yes no on off", json: "true false null"};
+function lang(name) {
+  const e = (name.match(/\.([^.]+)$/) || [])[1] || "";
+  return {py: "py", pyi: "py", sh: "sh", bash: "sh", zsh: "sh", c: "c", h: "c", cc: "c", cpp: "c", cxx: "c", hpp: "c", cu: "c", cuh: "c",
+          js: "js", ts: "js", mjs: "js", yaml: "yaml", yml: "yaml", json: "json", jsonl: "json", toml: "yaml", cfg: "yaml", ini: "yaml"}[e] || null;
+}
+const RULES = {
+  py: [["c", /#[^\n]*/], ["s", /[rbfuRBFU]{0,2}(?:"{3}[\s\S]*?"{3}|'{3}[\s\S]*?'{3}|"(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*')/],
+       ["d", /@[\w.]+/], ["f", /(?<=\b(?:def|class)\s+)\w+/], ["n", /\b\d[\d_]*\.?\d*(?:[eE][+-]?\d+)?j?\b/], ["k", /\b\w+\b/]],
+  sh: [["c", /#[^\n]*/], ["s", /"(?:\\.|[^"\\])*"|'[^']*'/], ["d", /\$\{?[\w@#?*!-]+\}?/], ["n", /\b\d+\b/], ["k", /\b\w+\b/]],
+  c:  [["c", /\/\/[^\n]*|\/\*[\s\S]*?\*\//], ["d", /^[ \t]*#[ \t]*\w+[^\n]*/], ["s", /"(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])'/],
+       ["n", /\b(?:0x[\da-fA-F]+|\d+\.?\d*(?:[eE][+-]?\d+)?)[fFuUlL]*\b/], ["f", /\b\w+(?=\s*\()/], ["k", /\b\w+\b/]],
+  js: [["c", /\/\/[^\n]*|\/\*[\s\S]*?\*\//], ["s", /`(?:\\.|[^`\\])*`|"(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*'/],
+       ["n", /\b\d+\.?\d*(?:[eE][+-]?\d+)?\b/], ["f", /\b\w+(?=\s*\()/], ["k", /\b\w+\b/]],
+  yaml: [["c", /#[^\n]*/], ["key", /^[ \t-]*[\w.\-/ ]+?(?=[ \t]*[:=](?:[ \t]|$))/], ["s", /"(?:\\.|[^"\\\n])*"|'[^'\n]*'/],
+         ["n", /\b-?\d+\.?\d*(?:[eE][+-]?\d+)?\b/], ["k", /\b\w+\b/]],
+  json: [["key", /"(?:\\.|[^"\\\n])*"(?=\s*:)/], ["s", /"(?:\\.|[^"\\\n])*"/], ["n", /-?\b\d+\.?\d*(?:[eE][+-]?\d+)?\b/], ["k", /\b\w+\b/]],
+};
+function highlight(text, l) {
+  const rules = RULES[l];
+  if (!rules || text.length > 400000) return esc(text);
+  const kw = new Set((KW[l] || "").split(" ")), all = new RegExp(rules.map(([, r]) => "(" + r.source + ")").join("|"), "gm");
+  let out = "", last = 0, m;
+  while ((m = all.exec(text))) {
+    if (m[0] === "") { all.lastIndex++; continue; }
+    const i = m.slice(1).findIndex(x => x !== undefined);
+    let kind = rules[i] && rules[i][0];
+    if (kind == "k" && !kw.has(m[0])) kind = null;          // a word that is no keyword: as it is
+    out += esc(text.slice(last, m.index)) + (kind ? `<span class="tk-${kind}">${esc(m[0])}</span>` : esc(m[0]));
+    last = all.lastIndex;
+  }
+  return out + esc(text.slice(last));
+}
+
+// ── a record ───────────────────────────────────────────────────────────────
+// JSON as a tree that folds: what is short on one line, what repeats as a table, what is long folded until it is asked
+const jsonTurned = new Map(), jsonAll = new Map();       // path -> the nodes turned by hand; path -> "fold" | "unfold"
+const SHORT = 88, MANY = 100;
+const isJson = path => /\.(json|jsonl|ndjson|ipynb|geojson)$/i.test(path);
+function asJson(v) {                                      // what is shown, read: null when it is not JSON, or not all here
+  const f = v.got && v.got.file;
+  if (!f || f.kind != "text" || !isJson(v.path)) return null;
+  if (v.read && v.read.text === f.text) return v.read;
+  let value, ok = true;
+  const byLine = /\.(jsonl|ndjson)$/i.test(v.path);
+  try { value = byLine ? f.text.split("\n").filter(l => l.trim()).map(l => JSON.parse(l)) : JSON.parse(f.text); } catch (e) { ok = false; }
+  v.read = {text: f.text, value, ok, byLine};
+  return v.read;
+}
+function jsonButtons() {
+  if (!view.read.ok) return "";
+  return load("jsonRaw", false) ? `<button data-v="raw" title="as a tree">tree</button>` :
+    `<button data-v="unfold" title="unfold everything">⊞</button><button data-v="fold" title="fold everything">⊟</button><button data-v="raw" title="as it is written">raw</button>`;
+}
+const isNode = v => v !== null && typeof v == "object";
+const keysOf = v => Array.isArray(v) ? v.length : Object.keys(v).length;
+function num(x) { return Number.isInteger(x) || !Number.isFinite(x) ? String(x) : String(Math.abs(x) >= 1e6 ? +x.toFixed(3) : +x.toPrecision(7)); }
+function scalar(v) {
+  if (v === null) return `<span class="js-0">null</span>`;
+  if (typeof v == "number") return `<span class="js-n" title="${v}">${num(v)}</span>`;
+  if (typeof v == "boolean") return `<span class="js-b">${v}</span>`;
+  if (/^https?:\/\/\S+$/.test(v)) return `<span class="js-s"><a href="${esc(v)}" target="_blank" rel="noopener">${esc(v)}</a></span>`;
+  return `<span class="js-s">${v === "" ? `<span class="p">""</span>` : esc(v)}</span>`;
+}
+function plainOf(v, room) {                               // its text on one line; null past `room`
+  if (!isNode(v)) { const s = typeof v == "string" ? v : JSON.stringify(v); return s.length > room || s.includes("\n") ? null : s; }
+  let n = 2, out = [];
+  for (const [k, x] of Object.entries(v)) {
+    const s = plainOf(x, room - n); if (s === null) return null;
+    n += s.length + 2 + (Array.isArray(v) ? 0 : k.length + 2); if (n > room) return null;
+    out.push(s);
+  }
+  return out.join(", ").padEnd(Math.max(0, n));
+}
+function line(v) {                                        // a value whole, on its line
+  if (!isNode(v)) return scalar(v);
+  const a = Array.isArray(v), p = s => `<span class="p">${s}</span>`;
+  const inner = a ? v.map(line) : Object.entries(v).map(([k, x]) => `<span class="jk">${esc(k)}</span>${p(":")} ${line(x)}`);
+  return p(a ? "[" : "{") + (inner.length ? " " + inner.join(p(", ")) + " " : "") + p(a ? "]" : "}");
+}
+function summary(v) {                                     // what a folded value holds, in a few words
+  const n = keysOf(v);
+  if (!Array.isArray(v)) { const ks = Object.keys(v); return `{ ${ks.slice(0, 6).join(", ")}${n > 6 ? ", …" : ""} }` + (n > 6 ? `  ${n} keys` : ""); }
+  if (v.every(x => typeof x == "number")) { let lo = Infinity, hi = -Infinity; for (const x of v) { if (x < lo) lo = x; if (x > hi) hi = x; } return `${n} numbers, ${num(lo)} … ${num(hi)}`; }
+  return `${n} ${v.every(isNode) ? (v.every(Array.isArray) ? "lists" : "objects") : "values"}`;
+}
+function tableOf(v) {                                     // objects that say the same things: their columns, else null
+  if (!Array.isArray(v) || v.length < 3) return null;
+  const cols = new Map();
+  for (const x of v) {
+    if (!isNode(x) || Array.isArray(x)) return null;
+    for (const k of Object.keys(x)) cols.set(k, (cols.get(k) || 0) + 1);
+    if (cols.size > 14) return null;
+  }
+  let said = 0; for (const n of cols.values()) said += n;
+  return cols.size && said >= 0.4 * cols.size * v.length ? [...cols.keys()] : null;
+}
+function cell(x) {
+  if (x === undefined) return "<td></td>";
+  const t = isNode(x) ? plainOf(x, 60) ? line(x) : `<span class="sum">${esc(summary(x))}</span>` : scalar(x);
+  return `<td class="${typeof x == "number" ? "num" : ""}" title="${esc(isNode(x) ? JSON.stringify(x).slice(0, 2000) : x)}">${t}</td>`;
+}
+function jsonHtml(v) {
+  const r = v.read, path = v.path;
+  if (!r.ok || load("jsonRaw", false)) {
+    const text = r.ok && !r.byLine ? JSON.stringify(r.value, null, 2) : r.text;
+    return `<div class="code" style="white-space:pre-wrap">${highlight(text, "json") || "( empty )"}</div>`;
+  }
+  const turned = jsonTurned.get(path) || new Set(), all = jsonAll.get(path);
+  const isOpen = (at, depth, x) => (turned.has(at) ? 1 : 0) ^ ((all && typeof x == "object" ? all == "unfold" : depth <= 1 && keysOf(x) <= (depth ? 20 : 30)) ? 1 : 0);
+  let left = 6000;                                        // lines drawn at most, at once
+  const row = (depth, key, i, body, at, open) =>
+    `<div class="jr${at === undefined ? "" : " fold"}" style="--d:${depth}"${at === undefined ? "" : ` data-json="${esc(at)}"`}><span class="tw">${at === undefined ? "" : open ? "▾" : "▸"}</span>` +
+    (key === null ? "" : `<span class="jk${i ? " i" : ""}">${esc(key)}</span>`) + body + `</div>`;
+  const node = (x, at, depth, key, i) => {
+    if (--left < 0) return "";
+    if (!isNode(x)) return row(depth, key, i, `<span class="jv">${scalar(x)}</span>`);
+    if (!keysOf(x) || plainOf(x, SHORT) !== null) return row(depth, key, i, `<span class="jv">${line(x)}</span>`);
+    const open = isOpen(at, depth, x);
+    return row(depth, key, i, `<span class="sum">${esc(summary(x))}</span>`, at, open) + (open ? inside(x, at, depth + 1) : "");
+  };
+  const inside = (x, at, depth) => {
+    if (Array.isArray(x) && x.every(e => !isNode(e) && String(e).length < 24)) {
+      const n = isOpen(at + "/…", depth + 1, x) ? x.length : 400;
+      return `<div class="jf" style="--d:${depth}">${x.slice(0, n).map(scalar).join("")}</div>` + (x.length > n ? row(depth, null, 0, `<span class="sum">┆ … ${x.length - n} more</span>`, at + "/…", false) : "");
+    }
+    const cols = tableOf(x);
+    if (cols) {
+      const n = isOpen(at + "/…", depth + 1, x) ? 5000 : 200;
+      return `<div class="jt" style="--d:${depth}"><table><tr><th class="i"></th>${cols.map(c => `<th>${esc(c)}</th>`).join("")}</tr>` +
+        x.slice(0, n).map((o, k) => `<tr><td class="i">${k}</td>${cols.map(c => cell(o[c])).join("")}</tr>`).join("") + `</table></div>` +
+        (x.length > n ? row(depth, null, 0, `<span class="sum">┆ … ${x.length - n} more</span>`, at + "/…", false) : "");
+    }
+    const list = Object.entries(x), a = Array.isArray(x);
+    if (list.length <= MANY) return list.map(([k, e]) => node(e, at + "/" + k, depth, k, a)).join("");
+    let h = "";                                           // many: by hundreds, each folded
+    for (let k = 0; k < list.length; k += MANY) {
+      const part = at + "/#" + k, open = turned.has(part) != (all == "unfold"), last = Math.min(list.length, k + MANY) - 1;
+      h += row(depth, null, 0, `<span class="sum">${esc(list[k][0])} … ${esc(list[last][0])}</span>`, part, open);
+      if (open) h += list.slice(k, last + 1).map(([kk, e]) => node(e, at + "/" + kk, depth + 1, kk, a)).join("");
+    }
+    return h;
+  };
+  return `<div class="js">${isNode(r.value) && keysOf(r.value) ? inside(r.value, "", 0) : line(r.value)}${left < 0 ? `<div class="note">┆ … fold something to see the rest</div>` : ""}</div>`;
+}
+function turnJson(at) {
+  const set = jsonTurned.get(view.path) || new Set();
+  set.has(at) ? set.delete(at) : set.add(at);
+  jsonTurned.set(view.path, set); drawView();
+}
+
+// ── the menu ───────────────────────────────────────────────────────────────
+function menu(x, y, path, dir) {
+  const here = det && det.here, m = $("menu");
+  const items = [["show", "show below", "click"], ["open", dir ? (here ? "open in the Finder" : "show below") : OPENED_IN_A_TAB.test(path) ? "open in a tab" : here ? "open in the editor" : "open in a tab", "double-click"]];
+  if (!dir) items.push(["tab", "open in a tab", ""], ["edit", "edit ( on this machine )", "e"], ["download", "download", "d"]);
+  items.push(["reveal", dir ? "open in the Finder" : "show in the Finder", "", !here], ["copy", "copy the path", ""]);
+  m.innerHTML = items.map(([w, t, k, off]) => `<div data-m="${w}" class="${off ? "off" : ""}">${esc(t)}<kbd>${esc(k)}</kbd></div>`).join("");
+  m.onclick = e => { const it = e.target.closest("[data-m]"); if (it) { hideMenu(); vAction(it.dataset.m, path, dir); } };
+  m.classList.add("on");
+  const r = m.getBoundingClientRect();
+  m.style.left = Math.min(x, innerWidth - r.width - 8) + "px"; m.style.top = Math.min(y, innerHeight - r.height - 8) + "px";
+}
+function hideMenu() { $("menu").classList.remove("on"); }
+document.addEventListener("click", e => { if (!e.target.closest("#menu")) hideMenu(); });
+
+// ── windows ────────────────────────────────────────────────────────────────
+function closeBox() { modal = null; $("veil").classList.remove("on"); }
+function confirmBox(c, go) {
+  modal = {enter: () => { closeBox(); go(); }};
+  $("box").className = "box" + (c.danger ? " danger" : "");
+  $("box").innerHTML = `<h4>${esc(c.title)}</h4><ul>${c.lines.map(l => `<li>${esc(l)}</li>`).join("")}</ul>` +
+    `<div class="keys"><button id="no">nothing<kbd>esc</kbd></button><button id="yes" class="${c.danger ? "danger" : "primary"}">${esc(c.verb)}<kbd>enter</kbd></button></div>`;
+  $("veil").classList.add("on"); $("yes").onclick = modal.enter; $("no").onclick = () => { closeBox(); say("nothing done"); };
+  $("yes").focus();
+}
+function promptBox(p, go) {
+  $("box").className = "box";
+  $("box").innerHTML = `<h4>${esc(p.title)}</h4><input id="typed" value="${esc(p.text)}" spellcheck="false">` +
+    `<div class="keys"><button id="no">nothing<kbd>esc</kbd></button><button id="yes" class="primary">keep it<kbd>enter</kbd></button></div>`;
+  modal = {enter: () => { const v = $("typed").value; closeBox(); go(v); }};
+  $("veil").classList.add("on"); $("yes").onclick = modal.enter; $("no").onclick = () => { closeBox(); say("nothing done"); };
+  $("typed").focus(); $("typed").select();
+}
+// Runs removed ( d, D; ADR 0023 ), in two times: the window at once, what goes in it as soon as the page knows, the room
+// freed when the machines said it ( a `du` there ). Yes: the rows greyed at once, gone when their agents removed them.
+const TREE_KINDS = ["run", "tnode", "tset", "thead"];
+function removable() {
+  const keys = marked.size > 1 ? rows.filter(r => marked.has(r.key)).map(r => r.key) : [sel];
+  return keys.filter(k => { const r = rows.find(r => r.key == k); return r && TREE_KINDS.includes(r.kind) && r.mark != "going"; });
+}
+function boxLines(lines, waiting) {
+  const ul = $("box").querySelector("ul");
+  if (ul) ul.innerHTML = lines.map(l => `<li class="${waiting && l.endsWith("…") ? "wait" : ""}">${esc(l)}</li>`).join("");
+}
+function under(keys) {                                  // the rows below these, as the list shows them: greyed with them
+  const out = new Set(keys);
+  for (const k of keys) {
+    const i = rows.findIndex(r => r.key == k); if (i < 0) continue;
+    const d = rows[i].depth, head = rows[i].kind == "thead";
+    for (let j = i + 1; j < rows.length && (rows[j].depth > d || (head && rows[j].depth == d && (rows[j].kind == "tset" || rows[j].tabled))); j++) out.add(rows[j].key);
+  }
+  return out;
+}
+async function removeRuns(how, keys) {
+  const what = keys.length > 1 ? `${keys.length} rows` : "this row";
+  confirmBox({title: how == "latest" ? `keep only the latest of ${what}?` : `remove the runs of ${what}?`,
+              lines: ["what goes: being looked at…"], verb: "remove for good", danger: true}, () => {});
+  const mine = modal; let plan = null;
+  $("yes").disabled = true;
+  mine.enter = () => {
+    if (!plan) return;
+    closeBox();
+    if (how == "all") { greyed = under(keys); drawList(); }
+    marked.clear();
+    ask("/act", {method: "POST", headers: {"Content-Type": "application/json"},
+                 body: JSON.stringify({op: "runs_remove", how, keys, plan, sure: true})})
+      .then(g => say(g.said || "")).catch(e => say(e.message))
+      .finally(() => { greyed = new Set(); state(true); });
+  };
+  $("yes").onclick = mine.enter;
+  const post = body => ask("/act", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+  try {
+    const got = await post({op: "runs_remove", how, keys});
+    if (modal !== mine) return;
+    if (!got.confirm) { closeBox(); return say(got.said || ""); }
+    plan = got.confirm.plan;
+    $("box").querySelector("h4").textContent = got.confirm.title;
+    boxLines(got.confirm.lines, true);
+    $("yes").disabled = false; $("yes").focus();
+    const m = await post({op: got.confirm.measure, plan});
+    if (modal === mine) { boxLines(m.lines, false); if (m.title) $("box").querySelector("h4").textContent = m.title; }
+  } catch (e) { if (modal === mine) { closeBox(); say(e.message); } }     // ( closed meanwhile: its sizes not wanted )
+}
+// `errand check` of a machine, in a window: what is wrong, and what puts it right -- which never removes a file errand did not
+// write, nor a run
+async function checkMachine(extra) {
+  const key = sel, post = body => ask("/act", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+  confirmBox({title: `check ${det ? det.title : ""}`, lines: [extra ? "being put right…" : "being looked at…"], verb: "close"}, () => {});
+  const mine = modal; $("no").style.display = "none";
+  $("box").classList.add("wide");
+  try {
+    const got = await post({op: "machine_check", key, ...extra});
+    if (modal !== mine) return;
+    $("box").querySelector("h4").textContent = `check ${got.machine}`;
+    $("box").querySelector("ul").outerHTML = `<div class="found">` + got.found.map(c =>
+      `<div class="f ${esc(c.level)}${c.done ? " done" : ""}"><span class="s">${c.done ? "✓" : {ok: "✓", info: "·", wrong: "✗"}[c.level] || "·"}</span><div>${esc(c.text)}` +
+      (c.done ? ` <span class="fx">${esc(c.done)}</span>` : c.fix ? ` <span class="fx">${esc((c.kind == "there" ? "bring back: " : "fix: ") + c.fix)}</span>` : "") +
+      (c.lines || []).map(l => `<div class="l">${esc(l)}</div>`).join("") + `</div></div>`).join("") + `</div>`;
+    const add = (text, body) => { const b = document.createElement("button"); b.textContent = text;
+      b.onclick = () => { closeBox(); checkMachine({...body, sure: true}); }; $("box").querySelector(".keys").prepend(b); };
+    if (got.there) add(`bring back ${got.there} run${got.there > 1 ? "s" : ""}`, {bring: true});
+    if (got.fixable) add(`fix ${got.fixable}`, {fix: true});
+    if (extra) refresh();
+  } catch (e) { if (modal === mine) { closeBox(); say(e.message); } }
+}
+function helpBox() {
+  $("box").className = "box";
+  $("box").innerHTML = `<h4>keys</h4><div class="help">${KEYS.map(([k, w]) => `<kbd>${esc(k)}</kbd><span>${esc(w)}</span>`).join("")}</div>` +
+    `<div class="keys"><button id="yes" class="primary">close<kbd>esc</kbd></button></div>`;
+  modal = {enter: closeBox}; $("veil").classList.add("on"); $("yes").onclick = closeBox;
+}
+
+// ── what the hand does ─────────────────────────────────────────────────────
+function setFocus(f) {
+  focus = f; $("list").classList.toggle("focus", f == "list"); $("detail").classList.toggle("focus", f == "detail");
+
+}
+function setTab(t) { if (t == tab) return; tab = t; keep("tab", t); sel = null; det = null; marked.clear(); closeView(); setFocus("list"); refresh(); }
+function refresh() { state(true); }
+function askDays() {                                      // the caches tab: unused after how many days ( ADR 0022 )
+  promptBox({title: "unused after how many days?", text: String(cacheDays)}, t => {
+    const d = Number(t); if (!(d > 0)) return say(`${t}: a number of days, above 0`);
+    cacheDays = d; keep("cacheDays", d); say(`unused: not used for ${d} days`); refresh(); });
+}
+function toggleAll() { cacheAll = !cacheAll; keep("cacheAll", cacheAll); say(cacheAll ? "every entry" : "the dead and unused entries only"); refresh(); }
+const opening = e => e.detail >= 2 || (MAC ? e.metaKey : e.ctrlKey);
+
+document.addEventListener("keydown", e => {
+  if (modal) {
+    if (e.key == "Escape") { closeBox(); say("nothing done"); e.preventDefault(); }
+    else if (e.key == "Enter") { modal.enter(); e.preventDefault(); }
+    return;
+  }
+  if (e.key == "Escape" && $("menu").classList.contains("on")) { hideMenu(); return; }
+  if (e.target == $("q")) {
+    if (e.key == "Escape") { $("q").value = ""; query = ""; refresh(); $("q").blur(); }
+    else if (e.key == "Enter") $("q").blur();
+    return;
+  }
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  const k = e.key, inList = focus == "list";
+  const page = Math.max(1, Math.floor($("list").clientHeight / 21) - 1);
+  let done = true;
+  if (k == "ArrowDown" && e.shiftKey && inList) extend(1);
+  else if (k == "ArrowUp" && e.shiftKey && inList) extend(-1);
+  else if (k == "ArrowDown") inList ? move(1) : pick(shownIndex() + 1);
+  else if (k == "ArrowUp") inList ? move(-1) : pick(Math.max(0, shownIndex() - 1));
+  else if (k == "PageDown") inList ? move(page) : $("detail").scrollBy(0, $("detail").clientHeight - 40);
+  else if (k == "PageUp") inList ? move(-page) : $("detail").scrollBy(0, -$("detail").clientHeight + 40);
+  else if (k == "Home") inList ? choose(rows[0]?.key) : pick(0);
+  else if (k == "End") inList ? choose(rows[rows.length - 1]?.key) : pick(1e9);
+  else if (k == "ArrowRight") inList ? fold(true) : foldOutput(true);
+  else if (k == "ArrowLeft") inList ? fold(false) : foldOutput(false);
+  else if (k == "Backspace" && view && !view.console) back();
+  else if (k == "Tab") JOB || setFocus(inList ? "detail" : "list");
+  else if ((k == "1" || k == "2" || k == "3") && !JOB) setTab({"1": "runs", "2": "machines", "3": "caches"}[k]);
+  else if (tab == "caches" && "iudD".includes(k) && !JOB) act("cache_remove", {how: {i: "dead", u: "unused", d: "flagged", D: "everywhere"}[k]});
+  else if (tab == "runs" && k == "s" && !JOB && focus == "list") sortNext();
+  else if (tab == "runs" && k == "c" && !JOB) act("runs_check");
+  else if (tab == "runs" && k == "b" && !JOB) act("runs_fetch");
+  else if (tab == "runs" && "dD".includes(k) && !JOB && focus == "list" && removable().length)   // ( in the detail, d downloads )
+    removeRuns(k == "D" ? "latest" : "all", removable());
+  else if (tab == "caches" && k == "h" && !JOB) act("cache_hold");
+  else if (tab == "caches" && k == "n" && !JOB) askDays();
+  else if (tab == "caches" && k == "v" && !JOB) toggleAll();
+  else if (k == "Enter") {
+    if (!inList) open(chosenPath(), view && view.dir);
+    else { const r = rows.find(r => r.key == sel); if (r && (r.open !== null || r.kind == "more")) toggle(r); else setFocus("detail"); }
+  }
+  else if (k == "o") open(chosenPath(), view && view.dir);
+  else if (k == "e") { const p = chosenPath(); p ? act("edit", {path: p}) : say("e: on a run, an output"); }
+  else if (k == "d") { const p = chosenPath(); p ? (location.href = fileUrl(p, true)) : say("d: on a run, an output"); }
+  else if (k == "k") act("kill");
+  else if (k == "f") act("forget");
+  else if (k == "a") act("watch");
+  else if (k == "r") act("rename");
+  else if (k == "R") act("refresh");
+  else if (k == "/") $("q").focus();
+  else if (k == "?") helpBox();
+  else if (k == "Escape" && marked.size && inList) { marked.clear(); drawList(); }
+  else if (k == "Escape") { if (view && !view.console) askConsole(); else { query = ""; $("q").value = ""; refresh(); } }
+  else done = false;
+  if (done) e.preventDefault();
+});
+function sortNext() {                                   // s: the table above the row, by its next column ( up, then down )
+  let j = selIndex();
+  while (j >= 0 && (rows[j].kind == "tset" || rows[j].kind == "run")) j--;
+  const h = rows[j]; if (!h || h.kind != "thead") return say("s: on a table of parameters, to sort it");
+  const cols = h.cols.map(c => c[0]), pre = `s:${h.tree}=`, now = [...opened].find(o => o.startsWith(pre));
+  const v = now ? now.slice(pre.length) : null;
+  const nxt = v === null ? cols[0] : !v.startsWith("-") ? "-" + v : cols[(cols.indexOf(v.slice(1)) + 1) % cols.length];
+  for (const o of [...opened]) if (o.startsWith(pre)) opened.delete(o);
+  opened.add(pre + nxt); keep("opened", [...opened]); refresh();
+}
+function sortBy(tree, col) {                             // a parameter table sorted by a column; again: the other way
+  const pre = `s:${tree}=`, now = [...opened].find(o => o.startsWith(pre));
+  for (const o of [...opened]) if (o.startsWith(pre)) opened.delete(o);
+  opened.add(pre + (now == pre + col ? "-" + col : col)); keep("opened", [...opened]); refresh();
+}
+$("list").addEventListener("click", e => {
+  const th = e.target.closest(".th"); if (th) return sortBy(th.dataset.tree, th.dataset.sort);
+  const el = e.target.closest(".row"); if (!el) return;
+  const at = +el.dataset.i, r = rows[at] && rows[at].key == el.dataset.key ? rows[at] : rows.find(r => r.key == el.dataset.key);
+  if (!r) return;
+  setFocus("list");
+  if (e.shiftKey && tab == "runs") return markTo(r.key);
+  if ((MAC ? e.metaKey : e.ctrlKey) && tab == "runs") return markOne(r.key);
+  choose(r.key, false, false, rows.indexOf(r));
+  if (e.target.closest(".fold") || r.kind == "day" || r.kind == "group" || r.kind == "more" || (r.open !== null && e.detail == 2)) toggle(r);
+});
+function pathClick(e, el) {
+  const path = el.dataset.path, dir = !!el.dataset.dir;
+  if (!path) return say("no output yet");
+  if (opening(e)) open(path, dir); else show(path, dir);
+}
+$("detail").addEventListener("click", e => {
+  if (e.target.closest("button[data-days]")) return askDays();
+  if (e.target.closest("button[data-all]")) return toggleAll();
+  const b = e.target.closest("button[data-act]");
+  if (b && b.dataset.act == "machine_check") return checkMachine();
+  if (b && b.dataset.act == "runs_remove") return removable().length ? removeRuns(b.dataset.how, removable()) : say("nothing to remove here");
+  if (b) return act(b.dataset.act, b.dataset.how ? {how: b.dataset.how} : b.dataset.copy ? {copy: b.dataset.copy} : undefined);
+  if (e.target.closest("#more")) { showMore = !showMore; keep("more", showMore); return drawDetail(); }
+  const c = e.target.closest(".chip.click");
+  if (c && c.dataset.machine) { const key = `["machine", ${JSON.stringify(c.dataset.machine)}, null]`;
+    tab = "machines"; keep("tab", tab); sel = key; det = null; closeView(); setFocus("list"); return refresh(); }
+  if (c && c.dataset.env) { query = c.dataset.env; $("q").value = query; return refresh(); }
+  if (c && c.dataset.path) return pathClick(e, c);
+  const tw = e.target.closest("[data-tree]");
+  if (tw) { setFocus("detail"); return toggleTree(tw.dataset.tree); }
+  const o = e.target.closest(".out .e, .out:not(.empty)");
+  if (o && o.dataset.dir && !o.dataset.look && !opening(e)) { setFocus("detail"); treeCur = o.dataset.path; return toggleTree(o.dataset.path); }
+  if (o && o.classList.contains("note")) return;
+  if (o) { setFocus("detail"); return o.dataset.console && !opening(e) ? askConsole() : pathClick(e, o); }
+  const p = e.target.closest(".path"); if (p) return pathClick(e, p);
+});
+$("view").addEventListener("click", e => {
+  const b = e.target.closest("button[data-v]"); if (b) return vAction(b.dataset.v, view.path, view.dir);
+  const cr = e.target.closest(".crumb"); if (cr) return pathClick(e, cr);
+  const js = e.target.closest("[data-json]"); if (js && !String(getSelection())) return turnJson(js.dataset.json);
+  const ent = e.target.closest(".ent"); if (ent) return pathClick(e, ent);
+});
+for (const pane of ["detail", "view"]) $(pane).addEventListener("contextmenu", e => {
+  const el = e.target.closest(".out .e, .out:not(.empty), .path, .ent, .chip[data-path]"); if (!el || !el.dataset.path) return;
+  e.preventDefault(); menu(e.clientX, e.clientY, el.dataset.path, !!el.dataset.dir);
+});
+$("detail").addEventListener("focus", () => focus != "detail" && setFocus("detail"));
+// A framed page ( an html output, a view's own page ) may take the focus as it loads ( a slider it focuses ): the keys
+// would go there. Given back to the pane it was on, unless the hand is over the frame ( a click in it keeps it ).
+let overFrame = false;
+document.addEventListener("mouseover", e => { overFrame = e.target.tagName == "IFRAME"; });
+window.addEventListener("blur", () => setTimeout(() => {
+  const a = document.activeElement;
+  if (a && a.tagName == "IFRAME" && !overFrame) { a.blur(); $(focus == "list" ? "list" : "detail").focus({preventScroll: true}); }
+}, 0));
+document.querySelectorAll(".tab").forEach(b => b.onclick = () => setTab(b.dataset.tab));
+$("refresh").onclick = () => act("refresh");
+$("check").onclick = () => act("runs_check");
+$("helpb").onclick = helpBox;
+let typing; $("q").addEventListener("input", () => { clearTimeout(typing); typing = setTimeout(() => { query = $("q").value; refresh(); }, 150); });
+$("veil").addEventListener("click", e => { if (e.target == $("veil")) closeBox(); });
+if (JOB) {
+  sel = JOBQ.get("key"); focus = "detail";
+  document.body.classList.add("job");
+  if (ONLY) document.body.classList.add("only");
+  $("main").insertBefore($("detail"), $("vsplit"));     // the detail where the list was, the viewer all the right
+  $("list").classList.remove("focus"); $("detail").classList.add("focus");
+}
+foot(); refresh();
+// What changes is pushed ( `/events`, ADR 0024 ): the lists read again when they changed, the detail when it is the one
+// shown, and nothing otherwise. A stream that was cut is reopened by the browser: all is read again then, as what a page
+// nobody saw did not read is when it is seen.
+let missed = false;
+function listen() {
+  const es = new EventSource("/events");
+  es.onopen = refresh;
+  es.onmessage = e => {
+    let m; try { m = JSON.parse(e.data); } catch (_) { return; }
+    if (m.said) say(m.said);
+    if (document.hidden) { missed = true; return; }
+    if (m.lists) { JOB && det && !det.kind ? detail() : state(); foot(); }      // ( a run not known yet )
+    const work = det && (det.kind == "proc" || det.kind == "run");
+    if (sel && (m.details.includes(sel) || (m.details.includes("*") && !work))) detail();
+  };
+}
+listen();
+document.addEventListener("visibilitychange", () => { if (!document.hidden && missed) { missed = false; refresh(); foot(); } });
+// the ages in the lists ( "3 min ago" ), once a minute; the gauges are measured while the machines are looked at, which is said here
+setInterval(() => { if (!document.hidden && !JOB && Date.now() - statedAt > (tab == "machines" ? 18000 : 58000)) state(); }, 20000);
+setInterval(() => { if (!document.hidden && said) foot(); }, 4000);
+// what ticks: how long a run has run, every second, asking nobody
+setInterval(() => { if (!document.hidden && det && det.started && !det.duration) drawDetail(); }, 1000);
+</script>
+</body>
+</html>

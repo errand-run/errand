@@ -1,0 +1,410 @@
+# Python API
+
+Every public name is in `errand.__all__`. A file of work needs these:
+
+```python
+from errand import entry, test, bench, track, experiment, Param, Args
+from errand import has_tag, tag, out_dir
+from errand import step, view
+from errand import need, have, skip, Skipped
+```
+
+A project file needs `import errand`, then:
+
+| | |
+|---|---|
+| declaring | `configure`, `envs`, `Env`, `default_env`, `default_run`, `runners`, `providers`, `value` |
+| layers | `Vars` `Venv` `Micromamba` `Conda` `Uv` `Nix` `Guix` `Module` `Apptainer` `Docker` `Podman` `Ssh` `Slurm` `Mpi` `Preload` `Windows` `WindowsBox` `Missing` |
+| runners | `Runner` `Errand` `Pytest` `Catch2` `Cargo` `Python` `Executable` |
+| the command line | `main` |
+
+::: tip The import surface is cheap
+Finding entries means importing **every** candidate file, so `import errand` loads only the
+standard library. Everything else is reached lazily, on first use.
+:::
+
+## Declaring work
+
+::: warning Being reworked
+errand's own entries are becoming a protocol any program can follow; see
+[Writing entries](/guide/declaring-work).
+:::
+
+### entry
+
+```python
+entry( name, tags = None, /, **kw ) -> Args | False
+```
+
+`name` and `tags` are positional-only; `tags = [ … ]` is accepted as a keyword too. Every other
+keyword is a **parameter** ( a `Param` ), or `ranks`: MPI processes, each running the body,
+overridden by `--ranks` ( see [Several processes](/guide/mpi) ). Anything else is a `TypeError`
+that says which, and where what it meant went: `exclusive`, `cpus`, `ram`, `gpus` are the
+command's ( `-x`, `--cpus`… ), `bulk` is `errand.default_run`.
+
+```python
+if p := entry( "solve", n = Param( 1000 ), ranks = 4 ):
+    ...
+```
+
+Returns `False` while the file is read to find its entries, and while another entry of the file is
+the one running. Returns an `Args` for the entry that is running.
+
+### test, track, bench, experiment
+
+```python
+test( name, tags = None, /, **kw )
+track( name, tags = None, /, **kw )
+bench( name, tags = None, /, **kw )
+experiment( name, tags = None, /, **kw )
+```
+
+`entry` under four names, so that the file says what the work is. They behave the same: which
+ones run is the target's to say, and the machine to itself is `-x`.
+
+### Param
+
+```python
+Param( default, *, help = "", choices = None )
+```
+
+The type comes from the default: `Param( 1000 )` reads its flag as an int. `help` shows in
+`errand list`; `choices` is checked before anything runs. Several values make a grid only under
+[`--grid`](/guide/matrices).
+
+### Args
+
+What the guard hands back:
+
+| | |
+|---|---|
+| `p.<name>` | each declared parameter, resolved |
+| `p.out_dir` | `Path` to this run's own directory, already created |
+| `p.results` | a dict; it ends up in `result.json`. Numeric values are summarized above the run |
+
+## Reading the environment
+
+### has_tag
+
+```python
+has_tag( expr: str ) -> bool
+```
+
+Does the selected environment satisfy the [expression](./expressions)? Outside errand, a file run
+by hand, it answers **yes to everything**: a file that silently disappears is worse than an import
+that fails loudly.
+
+```python
+import sys
+from errand import has_tag
+if not has_tag( "driver=torch" ):
+    sys.exit( 0 )
+import torch
+```
+
+### tag
+
+```python
+tag( name: str, default = None )
+```
+
+The value of one tag of the selected environment, or `default`.
+
+### out_dir
+
+```python
+out_dir( ) -> Path
+```
+
+This run's own directory, the one `p.out_dir` gives. Outside errand it answers `./out`.
+
+### download
+
+```python
+download( url: str, sha256: str | None = None, name: str | None = None ) -> Path
+```
+
+The path of the file at `url`, downloaded if it is not there yet, into
+`errand-cache/downloads/<sha256>/<name>` at the project root. `errand-cache` is a
+[cache zone](/guide/sync#a-cache-zone) of every project: pushed when missing over there,
+brought back when missing here. `sha256` is checked when given, never required; a URL already
+downloaded is found again without the network. Two runs that want one file at once download it once.
+
+A run over `Ssh` that cannot reach the URL asks up the chain: the agent of the host over there
+downloads it into the copy, else this side downloads it and sends it. The run waits meanwhile.
+A run nobody follows, or a script run by hand with no route, fails and says to
+`errand download URL` here: the next push brings it. In a shell script, `eval "$ERRAND_STEPS_SH"`
+gives a `download URL` function that prints the path. Without errand's program, errand's Python fetches the
+file itself, to the same place ( the current directory stands for the project's root outside one ).
+
+### memo
+
+```python
+@errand.memo
+@errand.memo( version = 0, key = None, ignore = ( ), save = None, load = None, source = False )
+```
+
+The function's result, kept by its arguments in `errand-cache/memo/`, the project's
+[cache zone](/guide/sync#a-cache-zone): computed once, then read back, on this machine and on
+every machine the cache reaches. A result computed on lmo comes back here after the command, and
+goes to the next machine with its push.
+
+The key hashes the function ( its file from the project root and its name ), `version`, and its
+arguments bound to its signature, defaults included, by what they hold: numbers, strings, containers,
+dataclasses, enums, numpy, jax and torch arrays ( dtype, shape, bytes ), a `Path` by its file's
+contents. Anything else is an error that says what to do: `key = lambda *args, **kw: …`,
+`ignore = [ "verbose" ]`, or a `__errand_key__()` method on the class. The function's code is not
+part of the key: raise `version` when what it computes changes ( `source = True` adds its own source ).
+
+Arrays, and tuples, lists or dicts of arrays, are kept as a `.npz`; the rest is pickled.
+`save( value, directory )` and `load( directory )` replace that. Two runs that want one result
+compute it once. A kept value that does not load is computed again. `errand.memo.mode = "off"`
+( or `ERRAND_MEMO=off` ) computes and keeps nothing; `"refresh"` computes and replaces. Outside a
+project, the function runs and nothing is kept. `f.memo_dir( *args )` says where a result is.
+
+### cache_dir
+
+```python
+cache_dir( zone: str ) -> Path
+```
+
+Where a [cache zone](/guide/sync#a-cache-zone) is: `zone` ( `"/data-cache"` ), a path from the
+project root, joined to the root, and created if missing. The root is the nearest directory above the
+current one that holds a project file ( `errand-*.py` ), so the answer is the same in a run over there
+and in a script run by hand here; outside a project, the current directory stands for it. Pass it down to the library that downloads or memoizes: errand sets
+no variable for it.
+
+### library_cache
+
+```python
+library_cache( name: str ) -> Path
+```
+
+Where the library `name` keeps what it makes, created if missing: `$ERRAND_CACHES/<name>` in a run, else the user's own cache directory, else
+a temporary directory only the user can write in ( one another may write in is refused: what it holds may be run ). A `$ERRAND_CACHES` that
+cannot be written is said on the error output. → [A library's caches](/guide/caching#a-library-s-caches-kept-tidy)
+
+### require
+
+```python
+require( gpus = None, gpu_ram = None, ram = None, cpus = None, exclusive = False, extra = False, ranks = None ) -> list
+```
+
+Asks the machine for more than the run was started with, and waits until it is given
+( [The run asks, from its code](/guide/machine#the-run-asks-from-its-code) ). Call it early, before
+what it protects is allocated: for Jax, before `import jax`. `gpu_ram` is what the run takes on each
+of its cards, a size ( `"40G"` ) or a share ( `"75%"` ); `gpus` without it takes cards whole. It asks
+for that much in all, what the run holds counting; with `extra = True`, for that much more than the
+run was started with ( by its environment and command line ), several such calls adding up
+( [In all, or more](/guide/machine#the-run-asks-from-its-code) ). It never shrinks the claim. Once granted it sets `CUDA_VISIBLE_DEVICES`, `HIP_VISIBLE_DEVICES` and
+`ROCR_VISIBLE_DEVICES` in this process, and returns the cards. What it asked is written in the run's
+record. In C++:
+`errand/require.hpp` ( [The run asks, from its code](/guide/machine#the-run-asks-from-its-code) ).
+
+Outside errand, with `--no-queue`, or in an allocation of somebody else's ( Slurm, PBS… ), it does
+nothing and returns `[ ]`. Standard library only.
+
+What cannot be given where the run is -- more ranks than it has, what an allocation does not have, two runs that wait for each other --
+stops it, and errand runs it again with what it asked up front: the process ends with 75, or, under pytest, the test is skipped.
+
+### result
+
+```python
+result( **values )
+```
+
+Numbers, or words, kept in the run's record.
+
+## Saying where the run is
+
+### step
+
+```python
+step( text: str = None, *, done: float = None, **values: float )
+```
+
+Where the run is now: `text` as a person reads it, `done` a fraction from 0 to 1, and named numbers,
+one curve each. Written to the run's journal, `$ERRAND_STEPS`, ten times per second at most; outside
+errand it does nothing. → [Where a run is: steps](/guide/steps)
+
+### build_dir
+
+```python
+build_dir( name: str = "main" ) -> Path
+```
+
+Where what the project builds goes, for this environment and this name, created if missing: in errand's caches, found again at the
+next run and by hand. → [Build directories](/guide/caching#build-directories)
+
+### view
+
+```python
+view( path, title: str = None, content: str | bytes = None ) -> bool
+```
+
+`path`, relative to the run's directory, is a file worth watching as it evolves. With `content`,
+errand writes it atomically. Where it opens is said by errand, on the machine one looks from; outside
+errand, by `view` itself, a line on the error output. → True: the caller has nothing to say. → [Where a run is: steps](/guide/steps#view-a-file-that-evolves)
+
+## Services
+
+### Service, services
+
+```python
+errand.services[ name ] = errand.Service( command, *, env = None, gpus = None, gpu_ram = None, ram = None,
+                                          cpus = None, exclusive = False, label = None, busy = None,
+                                          ready = None, idle = "10m", ports = None, others = False,
+                                          grace = "10s", cwd = None )
+```
+
+A server `errand serve NAME` starts if need be and stops when nobody uses it, declared in
+`~/.config/errand/services.py` or a project file.
+
+- `ports`: `{ name: spec }`, a spec being `"ANNOUNCED:SERVER"` ( either side empty: errand chooses ), an
+  int ( the announced side ) or `None`. A bare spec is one port named `port`; the default is one port,
+  both sides chosen. The announced side is where clients connect and errand listens; the server's side
+  is given to the command.
+- `{port:NAME}` in `command` and in the values of `env` is the server's side of port NAME ( also
+  `$PORT_NAME` ); `{port}` and `$PORT` when there is one port.
+- `busy`: a function of the server's ports ( `{ name: port }` ), or a shell command ( exit 0 ) with the
+  same `{port...}`, saying the server is in the middle of something; failing counts as busy. `ready`:
+  a function of the server's ports, for a server that accepts connections before it can answer.
+- `others`: let other accounts of the machine connect ( closed by default, on Linux ).
+
+→ [errand serve](/guide/serve)
+
+### http_json
+
+```python
+http_json( path: str, predicate = bool, port: str = None )
+```
+
+A `busy` probe: `GET http://127.0.0.1:<port><path>` on the server's side of port `port` ( default: the
+first ), its JSON given to `predicate`.
+
+## What only this machine can supply
+
+These read the plain values of the project's `errand-*.py` files, conventionally an untracked
+`errand-vars.py`: see [Configuration](/guide/configuration#what-only-this-machine-can-supply).
+
+| | |
+|---|---|
+| `need( key, what = "", *, example = None )` | the value, or raises `Skipped`: the entry is a `SKIP`, and the run ends saying what to write where. `what` is the sentence, `example` the value to suggest |
+| `have( key ) -> bool` | is it there? Never raises |
+| `skip( reason, hint = None )` | raises `Skipped`: this entry does not apply today |
+| `Skipped( reason, hint = None )` | the exception behind the two above |
+| `errand.value( key, default = None )` | for project files: the value, or `default`. Never skips |
+
+## Declaring a project
+
+In the project's `errand-*.py` files; see [Configuration](/guide/configuration).
+
+### configure
+
+```python
+errand.configure( outputs_directory = "errand-outputs", builds_directory = None, build = "build",
+                  src = [ ], exclude = [ ], zones = { } )
+```
+
+| | |
+|---|---|
+| `outputs_directory` | where errand writes for the project: `runs/`, `builds/`, `state/`. Relative to the root, or absolute; `ERRAND_OUTPUTS_DIR` overrides it on one machine |
+| `builds_directory` | what errand builds, elsewhere than `errand-outputs/builds/`. Relative to the root, or absolute |
+| `build` | where runners' builds go, one directory per environment: `build/<env>/` |
+| `src` | paths prepended to every child's `PYTHONPATH` |
+| `exclude` | directories discovery must not walk into |
+| `zones` | `{ path: "back" \| "build" }`: where a run writes in the project's copy over ssh |
+
+An unknown setting is a `TypeError` listing the ones that exist.
+
+### envs, Env, default_env
+
+```python
+errand.envs[ name ] = errand.Env( stack = ( ), prepare = None, tools = None, needs = None, **tags )
+errand.default_env = "name"          # optional: else the first one declared
+```
+
+Declares an [environment](/guide/environments); the key is its name. `stack` is a list of
+[layers](/guide/layers/), outermost first: `Ssh` must be first, `Windows` and `WindowsBox` first or
+right after an `Ssh`. `prepare`, when given, is the list the [preparation](/guide/environments#preparing-then-running)
+goes through instead, on the same machine or on another one, whose build is then carried to the
+run's copy. `tools` names what the runners start there,
+where the usual name is wrong ( [Tools](/guide/environments#tools-an-environment-names) ). `needs` is what
+every run in it takes of the machine, under the command line: `{ "gpus": 1, "gpu_ram": "75%", "ram": "16G" }`,
+with `cpus` and `exclusive` too ( [Three ways to ask](/guide/machine#three-ways-to-ask-one-claim) ). Keyword arguments are its [tags](/guide/tags). A name or a
+tag value cannot hold a comma. Only an `Env` can be stored.
+
+### default_run
+
+```python
+errand.default_run = [ "tests/**::*" ]
+```
+
+What a bare `errand run` runs: targets from the project root. With none, it prints the help.
+
+### providers
+
+```python
+errand.providers.append( declare )       # declare( root: Path ) fills errand.envs
+```
+
+Functions that declare environments before the project's files ( after `errand-vars.py` ). An
+installed package declares one under the entry point group `errand.envs`. An environment a provider
+declared is never the default.
+
+### runners
+
+```python
+errand.runners.replace( runner ) -> runner
+errand.runners[ "name" ] = runner
+del errand.runners[ "cargo" ]
+```
+
+A dict, name → runner, filled with the runners errand comes with. `replace` puts a configured runner
+in place of the default one of its kind; another name adds one, which `-r NAME` picks. See
+[Running a suite](/guide/runners/).
+
+## Layers
+
+Every argument is a keyword with a default unless shown otherwise.
+
+| layer | signature | page |
+|---|---|---|
+| `Vars` | `Vars( values )`: a dict, or a function of the selected tags returning one | [Vars](/guide/layers/vars) |
+| `Venv` | `Venv( python = "python", requirements = None, pip = [ ], create = False )` | [Venv and Uv](/guide/layers/venv) |
+| `Uv` | `Uv( path = ".venv", python = None, requirements = None, pip = [ ] )` | [Venv and Uv](/guide/layers/venv) |
+| `Micromamba` | `Micromamba( name, python = None, channels = [ "conda-forge" ], packages = [ ], requirements = None, pip = [ ], root_prefix = None, executable = None )` | [Micromamba](/guide/layers/micromamba) |
+| `Conda` | the same arguments as `Micromamba`, through `conda` | [Micromamba](/guide/layers/micromamba) |
+| `Nix` | `Nix( flake = ".", shell = None )` | [Nix and Guix](/guide/layers/nix-guix) |
+| `Guix` | `Guix( manifest = None, packages = [ ] )` | [Nix and Guix](/guide/layers/nix-guix) |
+| `Module` | `Module( "gcc/13", "openmpi" )` | [Module](/guide/layers/module) |
+| `Apptainer` | `Apptainer( image, recipe = None, flags = [ ], mounts = { }, pip = [ ], fakeroot = False, scratch = None, build_flags = [ ], build_on = None, install = None, run_from = None, exe = "apptainer" )` | [Containers](/guide/layers/containers) |
+| `Docker` | `Docker( image, recipe = None, flags = [ ], mounts = { }, pip = [ ], engine = "docker", user = "caller" )` | [Containers](/guide/layers/containers) |
+| `Podman` | `Docker` with `engine = "podman"`, `user = None` | [Containers](/guide/layers/containers) |
+| `Ssh` | `Ssh( host, root = None, python = "python3", options = [ ], also = [ ], errand_outputs_directory = None, cache = None, user = None, jump = None )` | [Ssh](/guide/layers/ssh) |
+| `Slurm` | `Slurm( partition = None, nodes = None, cpus = None, gpus = None, time = None, account = None, nodelist = None, qos = None, watch = None, ntasks_per_node = None, mpi = None, extra = [ ], keep_alive = None, allocation = None )` | [Slurm](/guide/layers/slurm) |
+| `Mpi` | `Mpi( launcher = "mpiexec", np = "-n", flags = [ ] )` | [MPI](/guide/layers/mpi) |
+| `Preload` | `Preload( *modules, learn = True )` | [Preload](/guide/layers/preload) |
+| `Windows` | `Windows( iso = None, key = None, index = 1, cpus = 4, ram = "8G", disk = "64G", msvc = True, python = "3.13.16", provision = [ ], fetch = [ ], also = [ ], keep = "5m", data = "32G", root = None )` | [Windows](/guide/layers/windows) |
+| `WindowsBox` | `WindowsBox( python = None, msvc = False, provision = [ ], fetch = [ ], also = [ ], root = None )` | [WindowsBox](/guide/layers/windows-box) |
+| `Missing` | `Missing( what, hint = None )` | [Missing](/guide/layers/missing) |
+
+## Runners
+
+| | |
+|---|---|
+| `Errand()` | errand's own entries: a `.py` that imports errand |
+| `Pytest( dirs = None, patterns = ( "test_*.py", "*_test.py" ), args = ( ), python = None, install = "auto", spec = "pytest" )` | [Pytest](/guide/runners/pytest) |
+| `Catch2( dir = None, pattern = "test_*.cpp", build = None, binary = None, args = ( ) )` | [Catch2](/guide/runners/catch2) |
+| `Cargo( manifest = None, args = ( ), release = False )` | [Cargo](/guide/runners/cargo) |
+| `Python()`, `Executable()` | a file or a command run whole: [Scripts and executables](/guide/runners/scripts) |
+| `Runner` | for a runner of your own: [Writing a runner](/guide/runners/writing) |
+
+## main
+
+```python
+errand.main( argv = None ) -> int
+```
+
+The command line, from Python: `errand.main( [ "run", "--env", "gpu", "train.py" ] )` starts the program ( `errand-run`, in this environment
+or on the path ) and returns its exit code. `argv = None` reads `sys.argv`.

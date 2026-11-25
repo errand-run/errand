@@ -1,0 +1,58 @@
+# A tag v2026.11.25.1 ( make release ): the commit is tested on every system, the packages are made once, installed, used, and, if all of
+# it passes, published. PyPI knows this workflow ( trusted publishing ): no key is kept anywhere. The environment `pypi` of the
+# repository may ask for somebody's yes before that.
+name: release
+on:
+  push: { tags: [ "v*" ] }
+
+permissions: { contents: read }
+
+concurrency: { group: release, cancel-in-progress: false }
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.tag.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - id: tag
+        env: { TAG: "${{ github.ref_name }}" }
+        run: |
+          ERRAND_VERSION="${TAG#v}" python3 lib/version.py
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main || { echo "$TAG is not on main"; exit 1; }
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+  test:
+    needs: version
+    uses: ./.github/workflows/test.yml
+    with: { version: "${{ needs.version.outputs.version }}" }
+
+  publish:
+    needs: [ version, test ]
+    runs-on: ubuntu-latest
+    environment: { name: pypi, url: "https://pypi.org/project/errand-run/${{ needs.version.outputs.version }}/" }
+    permissions: { id-token: write }
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { name: packages, path: dist }
+      - run: mkdir lib run && mv dist/errand_lib-* lib/ && mv dist/errand_run-*.whl run/ && test -z "$( ls dist )" && test "$( ls lib run | grep -c errand_ )" = 7
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with: { packages-dir: lib, skip-existing: true }
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with: { packages-dir: run, skip-existing: true }
+
+  github:
+    needs: [ version, publish ]
+    runs-on: ubuntu-latest
+    permissions: { contents: write }
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { name: programs, path: programs }
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          case "$TAG" in *rc*) how=--prerelease ;; *) how=--latest ;; esac
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes $how programs/*
