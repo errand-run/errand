@@ -61,6 +61,20 @@ func (s ServiceSpec) Asks() queue.Needs {
 	return n
 }
 
+// NeedsText: what it asks of the queue, as it was declared
+func (s ServiceSpec) NeedsText() string {
+	var words []string
+	for _, name := range []string{"gpus", "gpu_ram", "ram", "cpus"} {
+		if v := s.Needs[name]; v != nil {
+			words = append(words, fmt.Sprintf("%s=%v", name, v))
+		}
+	}
+	if s.Exclusive {
+		words = append(words, "exclusive")
+	}
+	return strings.Join(words, "  ")
+}
+
 func (s ServiceSpec) Claims() bool { return !s.Asks().IsZero() || s.Exclusive }
 
 var portField = regexp.MustCompile(`\{port(?::([a-z][a-z0-9_]*))?\}`)

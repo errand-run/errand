@@ -155,6 +155,7 @@ func (a *Place) watch(f *reach.FarChan) {
 			doc.Kept = kept
 			doc.System, doc.User, doc.Cache = runtime.GOOS, os.Getenv("USER"), kit.LocalCache()
 			doc.Rows = onceEach(doc.Rows)
+			doc.Rested = rested(doc.Serving)
 		}
 		handed := false // a run a batch system runs on another machine, its files on a disk they share: nothing tells
 		for _, r := range doc.Rows {

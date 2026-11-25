@@ -589,6 +589,7 @@ func (u *Ui) runRows(q UiAsked) []UiRow {
 				Detail: strings.TrimSpace(words + "  " + reach.Span(w.m.now()-since)), Kind: "proc", Mark: mark, Machine: ptr(w.m.Name()), What: &w.r, on: w.m})
 		}
 	}
+	rows = append(rows, u.serverRows(q)...)
 	tree := runTree(u.filtered(q), busy)
 	if q.Sel != "" { // the row looked at stays shown: what is above it kept open, a run that ends folded away included
 		folded, opened := map[string]bool{}, map[string]bool{}
@@ -613,6 +614,53 @@ func (u *Ui) runRows(q UiAsked) []UiRow {
 		rows = []UiRow{{Key: rowKey("note", "", "none"), Label: text, Kind: "note"}}
 	}
 	return rows
+}
+
+// serviceMark: in use, or on its way; a server that rests has no mark
+func serviceMark(s reach.ServingRow) string {
+	switch s.State {
+	case "in use", "busy":
+		return "run"
+	case "waiting", "starting":
+		return "wait"
+	case "failed":
+		return "FAIL"
+	}
+	return ""
+}
+
+// serviceWords: how it is, where it is reached, for how long
+func serviceWords(m *UiMachine, s reach.ServingRow) string {
+	if s.Ended > 0 {
+		return strings.TrimSpace(s.State + "  " + s.More + "  " + reach.Span(m.now()-s.Ended) + " ago")
+	}
+	return strings.TrimSpace(s.State + "  " + s.More + "  " + reach.Span(m.now()-s.Started))
+}
+
+// serverRows: the servers kept on every machine, with what runs
+func (u *Ui) serverRows(q UiAsked) []UiRow {
+	var rows []UiRow
+	open := !q.Folded["day:servers"]
+	n := 0
+	for _, m := range u.snapshot() {
+		if m.M.Dormant() || m.doc == nil {
+			continue
+		}
+		for _, s := range m.doc.Serving {
+			s := s
+			if (q.Project != "" && !reach.SameProject(q.Project, s.Project)) || !matches(q.Query, m.Name(), "service", s.Name, s.State) {
+				continue
+			}
+			if n++; open {
+				rows = append(rows, UiRow{Key: rowKey("service", m.Name(), s.Name), Label: fmt.Sprintf("%-12s %s", shortName(m.Name()), s.Name), Detail: serviceWords(m, s), Kind: "service",
+					Mark: serviceMark(s), Machine: ptr(m.Name()), What: &s, on: m})
+			}
+		}
+	}
+	if n == 0 {
+		return nil
+	}
+	return append([]UiRow{{Key: rowKey("day", "", "servers"), Label: fmt.Sprintf("servers ( %d )", n), Kind: "day", Open: yes(open), Fold: ptr("day:servers")}}, rows...)
 }
 
 func (u *Ui) filtered(q UiAsked) []runinfo.PastRun {
@@ -713,10 +761,14 @@ func (u *Ui) machineRows(q UiAsked) []UiRow {
 				rows = append(rows, UiRow{Key: rowKey("vm", m.Name(), v.ID), Label: v.Text, Detail: v.State, Kind: "vm", Depth: 1, Machine: ptr(m.Name()), What: &v, on: m})
 			}
 		}
-		for _, s := range m.doc.Serving {
+		for _, s := range append(append([]reach.ServingRow{}, m.doc.Serving...), m.doc.Rested...) {
 			s := s
-			if matches(q.Query, m.Name(), s.Name, s.State) {
-				rows = append(rows, UiRow{Key: rowKey("service", m.Name(), s.Name), Label: "service " + s.Name, Detail: strings.TrimSpace(s.State + "  " + s.More), Kind: "service", Depth: 1,
+			if matches(q.Query, m.Name(), "service", s.Name, s.State) {
+				kind := "service"
+				if s.Ended > 0 {
+					kind = "rested"
+				}
+				rows = append(rows, UiRow{Key: rowKey("service", m.Name(), s.Name), Label: "service " + s.Name, Detail: serviceWords(m, s), Kind: kind, Mark: serviceMark(s), Depth: 1,
 					Machine: ptr(m.Name()), What: &s, on: m})
 			}
 		}

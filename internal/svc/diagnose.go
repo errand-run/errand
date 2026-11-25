@@ -22,6 +22,7 @@ import (
 
 	"github.com/errand-run/errand/internal/caches"
 	"github.com/errand-run/errand/internal/kit"
+	"github.com/errand-run/errand/internal/layer"
 	"github.com/errand-run/errand/internal/reach"
 )
 
@@ -326,6 +327,18 @@ func typedWords(words []string) string {
 		}
 	}
 	return strings.Join(out, " ")
+}
+
+// typedProgram: a program, as the first word of a line typed on its machine. On Windows, bare when it can be ( cmd.exe and
+// PowerShell both read it ), else as PowerShell runs a quoted word
+func typedProgram(path string) string {
+	if layer.OnWindows {
+		if strings.ContainsAny(path, " '`$&;(){},") {
+			return "& '" + strings.ReplaceAll(path, "'", "''") + "'"
+		}
+		return path
+	}
+	return typedWords([]string{path})
 }
 
 func short7(rev string) string { return rev[:min(len(rev), 7)] }
@@ -750,7 +763,7 @@ func (l *looker) fetching(name, key string, entry map[string]any, want AskedServ
 		case dirty && python:
 			propose(fmt.Sprintf("an env of its own for %s on %s ( %s ), with %s: the nearest commit", key, l.machine, env, short), fetched, from)
 			propose(uncommitted+fmt.Sprintf("Put a checkout of %s that has them in that env ( replace CHECKOUT ); nothing else is touched", l.machine),
-				typedWords([]string{filepath.Join(env, "bin", "python")})+" -m pip install --no-deps -e CHECKOUT", "")
+				typedProgram(venvPython(env))+" -m pip install --no-deps -e CHECKOUT", "")
 			propose(asks, install(nil), "")
 		case dirty:
 			words, err := composed("CHECKOUT")

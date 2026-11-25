@@ -75,6 +75,7 @@ type OverviewDoc struct {
 	Agents  []AgentRow   `json:"agents"`
 	Kept    []KeptRow    `json:"kept"`
 	Serving []ServingRow `json:"serving"`
+	Rested  []ServingRow `json:"rested,omitempty"` // the services that ran here and do not now ( apart: a row of Serving is one that is held )
 	VMs     []VmRow      `json:"vms"`
 	Shared  bool         `json:"shared,omitempty"` // errand leaves nothing there
 }
@@ -90,6 +91,24 @@ type ServingRow struct {
 	Users   int     `json:"users"`
 	Started float64 `json:"started"`
 	Leaf    string  `json:"leaf,omitempty"`
+
+	Command []string      `json:"command,omitempty"`
+	Source  string        `json:"source,omitempty"` // where it is declared
+	Needs   string        `json:"needs,omitempty"`
+	Ports   []ServingPort `json:"ports,omitempty"`
+	Pid     int           `json:"pid,omitempty"`   // of the server; 0: not started
+	Agent   int           `json:"agent,omitempty"` // the pid of the agent that holds it
+	Waiting int           `json:"waiting,omitempty"`
+	Idle    float64       `json:"idle,omitempty"`
+	Log     string        `json:"log,omitempty"`
+	Ended   float64       `json:"ended,omitempty"` // one that rests: since when
+}
+
+// ServingPort is one port of a service that is held: where clients come, and where the server is.
+type ServingPort struct {
+	Name   string `json:"name"`
+	Port   int    `json:"port"`
+	Server int    `json:"server,omitempty"`
 }
 
 type VmRow struct {

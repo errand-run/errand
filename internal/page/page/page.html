@@ -68,7 +68,7 @@ body.dragging { user-select: none; }
               max-width: 55%; padding-left: 12px; }
 .row.proc .right, .row.run .right { flex: none; }        /* the time, the step: kept, the name gives way */
 .row.machine .label, .row.broken .label { font-weight: 600; }
-.row.dormant { color: var(--faint); }
+.row.dormant, .row.rested { color: var(--faint); }
 .row.day .label, .row.group .label, .row.centries .label { color: var(--dim); font-weight: 600; }
 .row.cache .label { font-weight: 600; }
 .row.note .label, .row.more .label { color: var(--dim); }
@@ -368,7 +368,7 @@ function label(r) {
     return r.cols.map(([n, a, b], i) => (i ? esc(r.label.slice(r.cols[i - 1][2], a)) : "") +
       `<span class="th" data-sort="${esc(n)}" data-tree="${esc(r.tree)}" title="sort by ${esc(n)}">${esc(r.label.slice(a, b))}</span>`).join("");
   if (r.kind == "tset") return esc(r.label);
-  if ((r.kind == "proc" || r.kind == "run") && tab == "runs" && !r.tabled) {          // its machine first, in grey
+  if ((r.kind == "proc" || r.kind == "run" || r.kind == "service") && tab == "runs" && !r.tabled) {          // its machine first, in grey
     const m = r.label.match(/^(\S+\s+)(.*)$/);
     if (m) return `<span class="where">${esc(m[1])}</span>${esc(m[2])}`;
   }
@@ -399,6 +399,7 @@ function drawList() {
 function drawCounts(c) {
   $("counts").innerHTML = `<span class="run ${c.running ? "on" : ""}">● ${c.running} running</span>` +
     `<span class="wait ${c.waiting ? "on" : ""}">◌ ${c.waiting} waiting</span>` +
+    `<span class="run ${c.servers ? "on" : ""}">${c.servers || 0} server${c.servers == 1 ? "" : "s"}</span>` +
     `<span>${c.machines} machines${c.off ? `, ${c.off} not watched` : ""}</span>`;
 }
 let stating = false, stateAgain = false, statedAt = 0;

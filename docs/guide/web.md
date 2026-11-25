@@ -66,7 +66,7 @@ machine's agent, which asks the others.
 
 ## Runs
 
-Tab `1`. What runs and what waits on top, then every run done, as a tree:
+Tab `1`. What runs and what waits on top, with the [servers](./serve) kept on every machine, then every run done, as a tree:
 
 ```text
 otrec/
@@ -98,7 +98,8 @@ A row can also be killed, through every layer, once confirmed.
 ## Machines
 
 Tab `2`. Each machine of the ledger: its gauges ( CPUs, memory, cards ), measured only while shown,
-what holds it, its VMs and guests, what is kept warm. `a` switches a machine's gauges off or on ( what
+what holds it, its VMs and guests, what is kept warm, its servers: those that are held, with their address, their clients,
+their command and their journal, and, in grey, those that ran there in the last week and stopped, with why. `a` switches a machine's gauges off or on ( what
 runs there is followed all the same ), or watches a dormant one; `r` gives it a
 name, `f` forgets it until work is sent there again.
 

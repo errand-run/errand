@@ -22,6 +22,7 @@ import (
 	"github.com/errand-run/errand/internal/caches"
 	"github.com/errand-run/errand/internal/filesync"
 	"github.com/errand-run/errand/internal/kit"
+	"github.com/errand-run/errand/internal/layer"
 )
 
 // servicePlace: a cache, a configuration, a home of our own -> their directory
@@ -348,11 +349,32 @@ func TestCodeFromARepository(t *testing.T) {
 		t.Errorf("%+v", e)
 	}
 	source["dirty"], want["version"] = true, "00000000"
-	if e = lookAt(want, nil, "painted"); !strings.Contains(e.Lines[0].Command, "-P CHECKOUT/pkg/services/s.py") || !strings.Contains(e.Lines[0].Comment, "not committed") {
+	if e = lookAt(want, nil, "painted"); !strings.Contains(e.Lines[0].Command, "-P "+typedWords([]string{filepath.Join("CHECKOUT", "pkg", "services", "s.py")})) || !strings.Contains(e.Lines[0].Comment, "not committed") {
 		t.Errorf("not committed: %+v", e)
 	}
 	if _, err = FetchFrom("git:"+from+"@"+rev, "", "", "", []string{from}); err != nil || !kit.Exists(filepath.Join(where, "big")) {
 		t.Errorf("the whole of it: %v", err)
+	}
+}
+
+func TestAPythonServiceNotCommitted(t *testing.T) {
+	servicePlace(t)
+	was := layer.OnWindows
+	defer func() { layer.OnWindows = was }()
+	entry := map[string]any{"protocol": 1, "version_of": []any{"s.py"}, "run": []any{"{python}", "{file:s.py}", "--port", "{port}"}}
+	source := map[string]any{"git": "https://github.com/me/repo", "rev": strings.Repeat("a", 40), "dir": "pkg", "dirty": true}
+	env := serviceEnv("painted#00000000")
+	for windows, python := range map[bool]string{false: filepath.Join(env, "bin", "python"), true: filepath.Join(env, "Scripts", "python.exe")} {
+		layer.OnWindows = windows
+		e := lookAt(map[string]any{"version": "00000000", "source": source, "package": map[string]any{"name": "pkg"}, "described": entry, "described_by": "store"}, nil, "painted")
+		if len(e.Lines) != 3 || e.Lines[1].Command != typedProgram(python)+" -m pip install --no-deps -e CHECKOUT" {
+			t.Errorf("windows %v: %+v", windows, e)
+		}
+	}
+	for path, typed := range map[string]string{`C:\e\a@0\Scripts\python.exe`: `C:\e\a@0\Scripts\python.exe`, `C:\it's here\python.exe`: `& 'C:\it''s here\python.exe'`} {
+		if layer.OnWindows = true; typedProgram(path) != typed {
+			t.Errorf("%s: %s", path, typedProgram(path))
+		}
 	}
 }
 

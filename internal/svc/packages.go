@@ -22,6 +22,7 @@ import (
 
 	"github.com/errand-run/errand/internal/caches"
 	"github.com/errand-run/errand/internal/kit"
+	"github.com/errand-run/errand/internal/layer"
 )
 
 const (
@@ -120,6 +121,14 @@ func serviceEnvs() []string {
 		}
 	}
 	return out
+}
+
+// venvPython: where a venv has its interpreter, made or still to make
+func venvPython(prefix string) string {
+	if layer.OnWindows {
+		return filepath.Join(prefix, "Scripts", "python.exe")
+	}
+	return filepath.Join(prefix, "bin", "python")
 }
 
 func pythonIn(prefix string) string {

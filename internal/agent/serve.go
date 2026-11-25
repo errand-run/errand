@@ -23,6 +23,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
 	"strconv"
@@ -115,10 +116,17 @@ func (s *service) status() map[string]any {
 func (s *service) row() reach.ServingRow {
 	st := s.status()
 	row := reach.ServingRow{Name: s.spec.Name, State: kit.Text(st["state"]), More: kit.Text(st["detail"]), Started: kit.Num(st["started"], 0), Project: s.spec.From}
+	row.Command, row.Source, row.Idle, row.Log, row.Agent = s.spec.Command, s.spec.Source, s.spec.Idle, filepath.Join(s.dir, "keeper.log"), os.Getpid()
+	if s.spec.Claims() {
+		row.Needs = s.spec.NeedsText()
+	}
 	s.mu.Lock()
-	row.Users = s.conns
+	row.Users, row.Waiting, row.Pid = s.conns, s.waiting, s.pid
 	if len(s.spec.Ports) > 0 {
 		row.Port = s.announced[s.spec.Ports[0].Name]
+	}
+	for _, p := range s.spec.Ports {
+		row.Ports = append(row.Ports, reach.ServingPort{Name: p.Name, Port: s.announced[p.Name], Server: s.server[p.Name]})
 	}
 	s.mu.Unlock()
 	if row.Port > 0 {
@@ -147,6 +155,67 @@ func (a *Place) serving() []reach.ServingRow {
 	sort.Slice(out, func(i, k int) bool { return out[i].Name < out[k].Name })
 	return out
 }
+
+const restedShown = 7 * 24 * time.Hour
+
+// rested: the services that ran on this machine, whichever agent held them, and that none of `held` is -- as their directory
+// says: what errand last wrote in their journal, and the ports kept for them
+func rested(held []reach.ServingRow) []reach.ServingRow {
+	on := map[string]bool{}
+	for _, r := range held {
+		on[r.Name] = true
+	}
+	var out []reach.ServingRow
+	logs, _ := filepath.Glob(filepath.Join(kit.LocalCache(), "serving", "*", "keeper.log"))
+	for _, path := range logs {
+		dir := filepath.Dir(path)
+		name := filepath.Base(dir)
+		st, err := os.Stat(path)
+		if on[name] || err != nil || time.Since(st.ModTime()) > restedShown || kit.Exists(filepath.Join(dir, "server.json")) {
+			continue
+		}
+		row := reach.ServingRow{Name: name, State: "stopped", Log: path, Ended: kit.Seconds(st.ModTime())}
+		if said := lastSaid(path, st.Size()); said != "" {
+			row.More = strings.TrimPrefix(said, "stopped: ")
+			if strings.HasPrefix(said, "failed") {
+				row.State, row.More = "failed", strings.TrimPrefix(said, "failed: ")
+			}
+			if row.More == row.State {
+				row.More = ""
+			}
+		}
+		kept := map[string]int{}
+		if data, err := os.ReadFile(filepath.Join(dir, "ports.json")); err == nil && json.Unmarshal(data, &kept) == nil {
+			for n, p := range kept {
+				row.Ports = append(row.Ports, reach.ServingPort{Name: n, Port: p})
+			}
+			sort.Slice(row.Ports, func(i, k int) bool { return row.Ports[i].Name < row.Ports[k].Name })
+		}
+		out = append(out, row)
+	}
+	sort.Slice(out, func(i, k int) bool { return out[i].Name < out[k].Name })
+	return out
+}
+
+// lastSaid: the last line errand wrote in a service's journal, among what the server wrote
+func lastSaid(path string, size int64) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	buf := make([]byte, min(size, 16<<10))
+	n, _ := f.ReadAt(buf, size-int64(len(buf)))
+	lines := strings.Split(string(buf[:n]), "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		if m := errandSaid.FindStringSubmatch(lines[i]); m != nil {
+			return m[1]
+		}
+	}
+	return ""
+}
+
+var errandSaid = regexp.MustCompile(`^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d errand: (.*)$`)
 
 // keeping: how many services, and machines errand boots, are held
 func (a *Place) keeping() int { return len(a.serving()) + len(a.vms()) }
@@ -493,9 +562,9 @@ func (s *service) run() {
 			state = "failed"
 		}
 		s.note("%s", why)
+		_ = os.Remove(filepath.Join(s.dir, "server.json")) // ( before it is said: it rests from then on )
 		close(s.done)
 		s.say(state, why)
-		_ = os.Remove(filepath.Join(s.dir, "server.json"))
 		s.log.Close()
 	}()
 	if err := s.listen(); err != nil {
@@ -956,7 +1025,7 @@ func (a *Place) serveService(req map[string]any, f *reach.FarChan) {
 		sort.Strings(names)
 		for _, n := range names {
 			if !seen[n] {
-				out = append(out, map[string]any{"name": n, "state": "ready", "detail": decl.Services[n].Source})
+				out = append(out, map[string]any{"name": n, "state": "declared", "detail": decl.Services[n].Source})
 			}
 		}
 		f.Reply(map[string]any{"ok": true, "services": out, "said": said})

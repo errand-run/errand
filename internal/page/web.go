@@ -576,7 +576,7 @@ func (w *webServer) state(u *Ui, q url.Values) map[string]any {
 		a.Sel = q.Get("sel")
 	}
 	rows := u.Build(a)
-	running, waiting, off, here := 0, 0, 0, ""
+	running, waiting, servers, off, here := 0, 0, 0, 0, ""
 	ms := u.snapshot()
 	for _, m := range ms {
 		if m.Here() {
@@ -588,6 +588,7 @@ func (w *webServer) state(u *Ui, q url.Values) map[string]any {
 		if m.doc == nil {
 			continue
 		}
+		servers += len(m.doc.Serving)
 		for _, r := range m.doc.Rows {
 			switch {
 			case r.Aside || r.State == "ended":
@@ -598,7 +599,7 @@ func (w *webServer) state(u *Ui, q url.Values) map[string]any {
 			}
 		}
 	}
-	return map[string]any{"rows": rows, "tab": a.Tab, "here": here, "counts": map[string]any{"running": running, "waiting": waiting, "machines": len(ms), "off": off}, "kept": w.said.Public > 0}
+	return map[string]any{"rows": rows, "tab": a.Tab, "here": here, "counts": map[string]any{"running": running, "waiting": waiting, "servers": servers, "machines": len(ms), "off": off}, "kept": w.said.Public > 0}
 }
 
 func (w *webServer) detail(u *Ui, key string) (map[string]any, error) {

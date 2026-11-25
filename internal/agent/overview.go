@@ -163,6 +163,7 @@ func overview(self *Place) reach.OverviewDoc {
 	out.Kept = append(out.Kept, warmKept()...)
 	out.Kept = append(out.Kept, unowned()...)
 	out.Rows = onceEach(out.Rows)
+	out.Rested = rested(out.Serving)
 	return out
 }
 

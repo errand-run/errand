@@ -416,11 +416,46 @@ func (u *Ui) facts(row *UiRow, m *UiMachine, step *stepFull) [][2]string {
 		line("machine", m.Name())
 		line("service", w.Name)
 		line("state", w.State)
-		line("says", w.More)
-		if w.Port > 0 {
-			line("address", fmt.Sprintf("http://127.0.0.1:%d", w.Port))
+		line("says", strings.TrimLeft(strings.TrimPrefix(w.More, fmt.Sprintf("127.0.0.1:%d", w.Port)), ", ")) // ( its address has its own line )
+		for _, p := range w.Ports {
+			k, v := "address", fmt.Sprintf("127.0.0.1:%d", p.Port)
+			if len(w.Ports) > 1 {
+				k = p.Name
+			}
+			switch {
+			case w.Ended > 0:
+				v += "  ( kept for it: nothing listens now )"
+			case p.Server > 0:
+				v += fmt.Sprintf("  → the server's, %d", p.Server)
+			}
+			line(k, v)
 		}
-		line("since", reach.Span(m.now()-w.Started))
+		if len(w.Ports) == 0 && w.Port > 0 {
+			line("address", fmt.Sprintf("127.0.0.1:%d", w.Port))
+		}
+		if w.Ended > 0 {
+			line("stopped", reach.Span(m.now()-w.Ended)+" ago")
+		} else {
+			line("since", reach.Span(m.now()-w.Started))
+			line("clients", fmt.Sprint(w.Users))
+			if w.Waiting > 0 {
+				line("waiting", fmt.Sprintf("%d connection%s, until it answers", w.Waiting, reach.Plural(w.Waiting)))
+			}
+		}
+		line("command", strings.Join(w.Command, " "))
+		line("needs", w.Needs)
+		if w.Idle > 0 {
+			line("idle", "stops once unused for "+reach.Span(w.Idle))
+		}
+		line("declared", w.Source)
+		line("project", w.Project)
+		if w.Pid > 0 {
+			line("pid", fmt.Sprint(w.Pid))
+		}
+		if w.Agent > 0 {
+			line("held by", fmt.Sprintf("the agent %d", w.Agent))
+		}
+		line("journal", w.Log)
 	case *reach.KeptRow:
 		line("machine", m.Name())
 		line(w.Kind, w.Text)
@@ -776,6 +811,9 @@ func (u *Ui) KillList(row *UiRow) []killing {
 	case *reach.TableRow:
 		out = append(out, killing{m, w.What, map[string]any{"op": "stop", "id": w.ID}})
 	case *reach.ServingRow:
+		if w.Ended > 0 {
+			break
+		}
 		out = append(out, killing{m, "service " + w.Name, map[string]any{"op": "service_stop", "name": w.Name}})
 	case *reach.VmRow:
 		out = append(out, killing{m, w.Text, map[string]any{"op": "vm_stop", "id": w.ID}})

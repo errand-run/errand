@@ -124,7 +124,7 @@ errand.services[ "two" ] = errand.Service( [ "sh", "-c", "python3 `+srv+` {port:
 	if strings.Contains(o.out, "service two") {
 		t.Errorf("unused, it stops: %q", o.out)
 	}
-	if o = p.errand("", "serve"); !strings.Contains(o.out, "two") || !strings.Contains(o.out, "ready") {
+	if o = p.errand("", "serve"); !strings.Contains(o.out, "two") || !strings.Contains(o.out, "declared") {
 		t.Errorf("declared, it is listed still: %q", o.out)
 	}
 
