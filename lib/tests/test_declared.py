@@ -189,7 +189,7 @@ if test( "services, as data: what errand keeps of one, and what is wrong said" )
 
 if test( "tags, parameters, steps: what a run reads and says" ):
     import contextlib, io, os
-    from errand import entries as E, rows, steps
+    from errand import entries as E, launcher, rows, steps
     has = lambda expr, tags: E.matches( expr, tags )
     assert has( "a & !b | c=3", { "a": True } ) and not has( "a & !b", { "a": True, "b": True } ) and has( "c=3", { "c": 3 } ) and has( "", { } )
     p = { "n": E.Param( 3, choices = [ 3, 5 ] ), "on": E.Param( True ), "name": E.Param( None ) }
@@ -199,14 +199,22 @@ if test( "tags, parameters, steps: what a run reads and says" ):
     refused( lambda: E.resolve_params( p, { "n": "x" } ), "cannot read" )
     with tempfile.TemporaryDirectory() as tmp:
         kept = { k: os.environ.get( k ) for k in ( steps.ENV, steps.RESULTS ) }
+        program = launcher.program
+        def no_program( ):
+            raise FileNotFoundError( "no errand here" )
         try:
             for k in kept:
                 os.environ.pop( k, None )
             said = io.StringIO()
+            launcher.program = lambda: "errand"
             with contextlib.redirect_stderr( said ), contextlib.redirect_stdout( io.StringIO() ) as out:
                 assert errand.view( "x.html", title = "X" ) and errand.view( "x.html" ) and errand.view( "a b.sviz", open = errand.Static() )
             lines = said.getvalue().splitlines()
             assert len( lines ) == 2 and lines[ 0 ].startswith( "  ↗ X  file:///" ) and "errand open '/" in lines[ 1 ] and out.getvalue() == "", lines
+            launcher.program = no_program
+            with contextlib.redirect_stderr( io.StringIO() ) as said:
+                assert errand.view( "c.sviz", open = errand.Static() )
+            assert said.getvalue().startswith( "  ↗ c.sviz  file:///" ), said.getvalue()
             assert rows.text( "h", [ "a", "b" ], "c" ) == "h  a b  c"
             os.environ.update( { steps.ENV: f"{tmp}/{steps.FILE}", steps.RESULTS: f"{tmp}/results.jsonl" } )
             for i in range( 50 ):
@@ -222,6 +230,7 @@ if test( "tags, parameters, steps: what a run reads and says" ):
             assert ( Path( tmp ) / "a/v.html" ).read_text() == "<p>" and json.loads( open( f"{tmp}/results.jsonl" ).read() ) == { "seconds": 1.5 }
             assert rows.text( "h", "c" ).startswith( rows.MARK )
         finally:
+            launcher.program = program
             steps.flush()
             for k, v in kept.items():
                 os.environ.pop( k, None ) if v is None else os.environ.__setitem__( k, v )

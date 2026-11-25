@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -26,7 +27,12 @@ import (
 // servicePlace: a cache, a configuration, a home of our own -> their directory
 func servicePlace(t *testing.T) string {
 	t.Helper()
-	tmp, _ := filepath.EvalSymlinks(t.TempDir())
+	tmp, err := os.MkdirTemp("", "e") // ( short: git for Windows refuses a path of more than 260 characters )
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(tmp) })
+	tmp, _ = filepath.EvalSymlinks(tmp)
 	for _, v := range []string{"MAMBA_ROOT_PREFIX", "CONDA_ROOT", "CONDA_PREFIX"} {
 		t.Setenv(v, "")
 	}
@@ -35,6 +41,15 @@ func servicePlace(t *testing.T) string {
 	t.Setenv("XDG_RUNTIME_DIR", filepath.Join(tmp, "run"))
 	t.Setenv("HOME", filepath.Join(tmp, "home"))
 	return tmp
+}
+
+// fileURL: a path, as a `file:` URL names it on this system
+func fileURL(path string) string {
+	path = filepath.ToSlash(path)
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+	return (&url.URL{Scheme: "file", Path: path}).String()
 }
 
 func textOf(t *testing.T, path string) string {
@@ -68,14 +83,14 @@ func aPackage(t *testing.T, prefix, editable string) string {
 	dir := filepath.Join(site, "fakepkg", "svc")
 	if editable != "" {
 		dir = filepath.Join(editable, "src", "fakepkg", "svc")
-		put(t, filepath.Join(dist, "direct_url.json"), fmt.Sprintf(`{"url": "file://%s", "dir_info": {"editable": true}}`, editable))
+		put(t, filepath.Join(dist, "direct_url.json"), fmt.Sprintf(`{"url": %q, "dir_info": {"editable": true}}`, fileURL(editable)))
 		put(t, filepath.Join(site, "__editable___fakepkg_1_2_finder.py"), "MAPPING: dict[str, str] = {'fakepkg': '"+filepath.Dir(dir)+"'}\n")
 	}
 	put(t, filepath.Join(dir, "toy.py"), "print( 'toy' )\n")
 	put(t, filepath.Join(dir, describedFile), `{"format": 1, "package": {"name": "fakepkg", "pip": "fakepkg"}, "services": {
  "toy": {"protocol": 1, "text": "a toy", "version_of": ["toy.py"], "run": ["{python}", "{file:toy.py}", "--port", "{port}"], "idle": "5s"},
  "drawn": {"protocol": 1, "version_of": ["toy.py"], "run": ["{tool:painter}", "{file:toy.py}", "--port", "{port}"],
-  "tools": {"painter": {"min": "2.0", "look": {"*": ["`+prefix+`/no-painter"]}, "version_from": [{"dirname": "painter-(\\d+\\.\\d+\\.\\d+)"}]}}}}}`)
+  "tools": {"painter": {"min": "2.0", "look": {"*": ["`+filepath.ToSlash(prefix)+`/no-painter"]}, "version_from": [{"dirname": "painter-(\\d+\\.\\d+\\.\\d+)"}]}}}}}`)
 	return dir
 }
 
@@ -210,6 +225,9 @@ func TestAFileFetched(t *testing.T) {
 }
 
 func TestTheDiagnosis(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the programs it looks at are shell scripts")
+	}
 	tmp := servicePlace(t)
 	dir := aPackage(t, filepath.Join(tmp, "cache", "svc-envs", "fake"), "")
 	marker := filepath.Join(tmp, "ran")
@@ -300,14 +318,14 @@ func TestCodeFromARepository(t *testing.T) {
 	git(t, repo, "add", ".")
 	git(t, repo, "commit", "-qm", "one")
 	git(t, repo, "config", "uploadpack.allowFilter", "true")
-	rev, from := git(t, repo, "rev-parse", "HEAD"), (&url.URL{Scheme: "file", Path: repo}).String()
+	rev, from := git(t, repo, "rev-parse", "HEAD"), fileURL(repo)
 	v, _ := serviceVersion("painted", entry, svc)
 	source := map[string]any{"git": from, "rev": rev, "dir": "pkg/services", "dirty": false}
 	want := map[string]any{"version": v, "source": source, "described": entry, "described_by": "store"}
 	e := lookAt(want, nil, "painted")
 	where := repoDir(from, rev)
 	if len(e.Lines) != 2 || e.Lines[0].Command != fmt.Sprintf("errand serve fetch --on m1 git:%s@%s#paths=pkg/services,pkg/store.py", from, rev) || !e.Lines[0].Unknown ||
-		!strings.Contains(e.Lines[1].Command, "-P "+filepath.Join(where, "pkg", "services", "s.py")) {
+		!strings.Contains(e.Lines[1].Command, "-P "+typedWords([]string{filepath.Join(where, "pkg", "services", "s.py")})) {
 		t.Fatalf("%+v", e)
 	}
 	if _, err := FetchFrom("git:"+from+"@"+rev, "", "", "", nil); err == nil || !strings.Contains(err.Error(), "errand.sources") {
@@ -326,7 +344,7 @@ func TestCodeFromARepository(t *testing.T) {
 	if p := providing("painted#" + v); len(p) != 1 || p[0].Python != "" {
 		t.Errorf("found: %+v", p)
 	}
-	if e = lookAt(want, nil, "painted"); e.State != "installable" || len(e.Lines) != 1 || !strings.HasSuffix(e.Lines[0].Command, fmt.Sprintf("painted#%s -- %s -P %s --port {port}", v, tool, filepath.Join(where, "pkg", "services", "s.py"))) {
+	if e = lookAt(want, nil, "painted"); e.State != "installable" || len(e.Lines) != 1 || !strings.HasSuffix(e.Lines[0].Command, fmt.Sprintf("painted#%s -- %s --port {port}", v, typedWords([]string{tool, "-P", filepath.Join(where, "pkg", "services", "s.py")}))) {
 		t.Errorf("%+v", e)
 	}
 	source["dirty"], want["version"] = true, "00000000"
@@ -370,7 +388,7 @@ func TestDevSources(t *testing.T) {
 	if now, _ := p.Signature("toy"); now == sig {
 		t.Errorf("edited, it is the same")
 	}
-	put(t, filepath.Join(tmp, "config", "errand", devOff), `["`+checkout+`"]`)
+	put(t, filepath.Join(tmp, "config", "errand", devOff), fmt.Sprintf("[%q]", checkout))
 	if got, _ = l.devLook("toy", want); got.State != "unavailable" || !got.Off {
 		t.Errorf("turned off: %+v", got)
 	}

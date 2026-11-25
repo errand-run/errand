@@ -33,6 +33,7 @@ WORK     = ".errand-work"
 ENV      = "ERRAND_MEMO"             # off | refresh
 BEAT     = 30.0                      # seconds between two touches of a held lock
 STALE    = 300.0                     # a lock untouched this long was left by a run that died
+SETTLED  = 10.0                      # seconds a file is left alone before its date is trusted to tell it from another
 FORMAT   = 1                         # how keys are made: raised if that changes
 
 
@@ -46,13 +47,18 @@ _file_hashes: dict = { }             # ( path, size, mtime ) -> its hash, in thi
 
 
 def _file_digest( p: Path ) -> str:
+    """A date is coarse ( a few ms on Linux, 2 s on some disks; a server's clock is not this one's ): a file written just
+    now may be written again under the same one, and is read each time."""
     st = p.stat()
     k = ( str( p ), st.st_size, st.st_mtime_ns )
-    if k not in _file_hashes:
+    settled = time.time() - st.st_mtime > SETTLED
+    if not settled or k not in _file_hashes:
         h = hashlib.sha256()
         with open( p, "rb" ) as f:
             for chunk in iter( lambda: f.read( 1 << 20 ), b"" ):
                 h.update( chunk )
+        if not settled:
+            return h.hexdigest()
         _file_hashes[ k ] = h.hexdigest()
     return _file_hashes[ k ]
 

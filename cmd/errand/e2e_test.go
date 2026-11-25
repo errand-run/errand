@@ -1178,7 +1178,9 @@ errand.envs[ "box" ] = errand.Env( [ errand.Ssh( host = "box", root = "copy/proj
 	gate := filepath.Join(filepath.Dir(p.root), "gate")
 	p.write("long.sh", "#!/bin/sh\necho started; while [ ! -e "+gate+" ]; do sleep 0.1; done; echo finished\n")
 	agents := func() []string {
-		out, _ := exec.Command("pgrep", "-fl", "place --dir "+p.cache()).Output()
+		out, _ := exec.Command("pgrep", "-f", "place --dir "+p.cache()).Output()
+		pids := strings.Join(strings.Fields(string(out)), ",")
+		out, _ = exec.Command("ps", "-ww", "-o", "pid=,command=", "-p", pids).Output() // ( `pgrep -l` says the arguments on macOS only )
 		return strings.Split(strings.TrimSpace(string(out)), "\n")
 	}
 	// a run in a container is a job of that container's agent, entered once
@@ -1541,8 +1543,9 @@ errand.envs[ "also" ] = errand.Env( [ errand.Slurm( cpus = 4, keep_alive = "3s" 
 		t.Errorf("another environment through the same Slurm: %q %q, %d submissions", o.out, o.err, submissions())
 	}
 	// inside it, runs that say what they need run side by side; one that says nothing takes it whole, and waits
-	a := strings.Fields(p.errand("", "run", "--batch", "-q", "--cpus", "2", "--env", "kept", "long.sh", "a").out + " x")[0]
-	b := strings.Fields(p.errand("", "run", "--batch", "-q", "--cpus", "2", "--env", "kept", "long.sh", "b").out + " x")[0]
+	// ( one core each: the node is this machine, which may have three )
+	a := strings.Fields(p.errand("", "run", "--batch", "-q", "--cpus", "1", "--env", "kept", "long.sh", "a").out + " x")[0]
+	b := strings.Fields(p.errand("", "run", "--batch", "-q", "--cpus", "1", "--env", "kept", "long.sh", "b").out + " x")[0]
 	whole := strings.Fields(p.errand("", "run", "--batch", "-q", "--env", "kept", "sh", "-c", "echo alone").out + " x")[0]
 	said := ""
 	for i := 0; i < 60; i++ {

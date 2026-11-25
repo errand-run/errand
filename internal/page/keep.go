@@ -16,10 +16,28 @@ import (
 )
 
 func (w *webServer) serveStatic(rw http.ResponseWriter, r *http.Request) {
-	w.mu.Lock()
-	w.last = time.Now()
-	w.mu.Unlock()
+	defer w.inUse()()
 	staticServe(rw, r, w.pageServices)
+}
+
+// inUse: the server is, from here to the call of what is returned
+func (w *webServer) inUse() func() {
+	count := func(by int) {
+		w.mu.Lock()
+		w.serving += by
+		w.last = time.Now()
+		w.mu.Unlock()
+	}
+	count(1)
+	return func() { count(-1) }
+}
+
+// idle: for how long nobody has used it ( w.mu held )
+func (w *webServer) idle() time.Duration {
+	if w.serving > 0 {
+		return 0
+	}
+	return time.Since(w.last)
 }
 
 // webKeep: the page's address, and the stores', kept by the system -- or given back

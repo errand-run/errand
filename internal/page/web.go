@@ -232,6 +232,7 @@ type webServer struct {
 	mu      sync.Mutex
 	u       *Ui
 	last    time.Time
+	serving int // requests of the pages it serves, being answered: a service may be long to start, a WebSocket is open for hours
 	cond    *sync.Cond
 	n       int
 	notices []notice
@@ -312,7 +313,7 @@ func webServe(args []string) int {
 		case <-time.After(time.Second):
 		}
 		w.mu.Lock()
-		idle := time.Since(w.last)
+		idle := w.idle()
 		if w.u != nil && idle > webLinger {
 			go w.u.Close()
 			w.u = nil

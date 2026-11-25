@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -206,6 +207,15 @@ func distSaid(dist string) (string, string) {
 	return name, version
 }
 
+// pathOfURL: the path a `file:` URL names, as this system writes it -- `file:///C:/x` is `C:\x`
+func pathOfURL(u *url.URL) string {
+	p := u.Path
+	if runtime.GOOS == "windows" && len(p) > 2 && p[0] == '/' && p[2] == ':' {
+		p = p[1:]
+	}
+	return filepath.FromSlash(p)
+}
+
 // installedFrom: what an installation says of where it comes from -- its checkout when it is one, and its repository
 func installedFrom(dist string) (editable, repository string) {
 	d := caches.ReadObject(filepath.Join(dist, "direct_url.json"))
@@ -218,9 +228,9 @@ func installedFrom(dist string) (editable, repository string) {
 	}
 	if u, err := url.Parse(from); err == nil && u.Scheme == "file" {
 		if info, _ := d["dir_info"].(map[string]any); info["editable"] == true {
-			editable = u.Path
+			editable = pathOfURL(u)
 		}
-		return editable, originOf(u.Path)
+		return editable, originOf(pathOfURL(u))
 	}
 	return "", ""
 }

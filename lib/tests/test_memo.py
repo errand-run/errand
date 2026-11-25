@@ -70,8 +70,13 @@ if test( "the key holds what arguments hold: containers, dataclasses, enums, fil
     ( d / "b" ).mkdir()
     ( d / "b/a.bin" ).write_bytes( b"x" )
     assert k( d / "a.bin" ) == k( d / "b/a.bin" ), "a file by its contents, not where it is"
+    before = k( d / "a.bin" )
     ( d / "b/a.bin" ).write_bytes( b"y" )
     assert k( d / "a.bin" ) != k( d / "b/a.bin" )
+    was = ( d / "a.bin" ).stat()           # written again at once: some systems' dates do not tell it from the first
+    ( d / "a.bin" ).write_bytes( b"z" )
+    os.utime( d / "a.bin", ns = ( was.st_atime_ns, was.st_mtime_ns ) )
+    assert k( d / "a.bin" ) not in ( k( d / "b/a.bin" ), before )
 
     class Opaque:
         pass
