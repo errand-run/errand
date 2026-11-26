@@ -283,7 +283,7 @@ errand.runners.replace( errand.Pytest( python = "`+filepath.Join(dir, "snake")+`
 func TestWhatARunFindsAroundIt(t *testing.T) {
 	p := newPlace(t)
 	p.write("src/mine.py", "X = 1\n")
-	p.write("say.sh", "#!/bin/sh\neval \"$ERRAND_STEPS_SH\"\nstep here done=0.5\nresult n=3\necho \"caches $ERRAND_CACHES\"\necho \"build $ERRAND_BUILD_DIR\"\npython3 -c 'import mine, errand; print( \"errand\", errand.__file__ )'\n")
+	p.write("say.sh", "#!/bin/sh\neval \"$ERRAND_STEPS_SH\"\nstep here done=0.5 r=1e-3:log c=2:lin\nresult n=3\necho \"caches $ERRAND_CACHES\"\necho \"build $ERRAND_BUILD_DIR\"\npython3 -c 'import mine, errand; print( \"errand\", errand.__file__ )'\n")
 	_ = os.Chmod(filepath.Join(p.root, "say.sh"), 0o755)
 	o := p.errand("", "run", "-q", "./say.sh")
 	caches := filepath.Join(p.root, "errand-outputs", "caches")
@@ -293,7 +293,7 @@ func TestWhatARunFindsAroundIt(t *testing.T) {
 	if !strings.Contains(o.out, "errand "+filepath.Join(p.cache(), "binding")) {
 		t.Errorf("errand's Python, and the project's sources, can be imported:\n%s%s", o.out, o.err)
 	}
-	if kit.Num(o.result.Results["n"], 0) != 3 || !strings.Contains(read(t, filepath.Join(o.leaf, "steps.jsonl")), `"text": "here"`) {
+	if kit.Num(o.result.Results["n"], 0) != 3 || !strings.Contains(read(t, filepath.Join(o.leaf, "steps.jsonl")), `"text": "here", "done": 0.5, "r": 1e-3, "c": 2, "scales": {"r": "log", "c": "lin"}}`) {
 		t.Errorf("the shell's functions: %+v", o.result.Results)
 	}
 	if _, err := os.Stat(filepath.Join(caches, "CACHEDIR.TAG")); err != nil {

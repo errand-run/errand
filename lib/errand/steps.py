@@ -1,6 +1,7 @@
 """Steps ( ADR 0010 ): a run says where it is, and errand shows it live.
 
     errand.step( f"iteration {i}", done = i / n, residual = r )     # text, fraction, curves
+    errand.step( residual = errand.Log( r ), cfl = errand.Lin( c ) )   # how a curve is drawn, when errand would not guess
     errand.view( "convergence.html", content = html )                # a file of the run that evolves
     errand.result( seconds = 1.52 )                                  # numbers kept in the run's record
 
@@ -12,6 +13,7 @@ from __future__ import annotations
 
 import atexit
 import json
+import math
 import os
 import shlex
 import sys
@@ -41,6 +43,9 @@ class _Journal:
 
     def add( self, event: dict, now = False ):
         with self.lock:
+            was, new = self.pending.get( "scales" ), event.get( "scales" )
+            if isinstance( was, dict ) and isinstance( new, dict ):
+                event = { **event, "scales": { **was, **new } }
             self.pending.update( event )
             self.pending[ "t" ] = time.time()
             if now or self.pending[ "t" ] - self.written >= RATE:
@@ -75,13 +80,32 @@ def flush( ):
             _journal.write()
 
 
+class Log( float ):
+    """A step's value whose curve is drawn on a log scale ( a residual, a loss ): `errand.step( residual = errand.Log( r ) )`."""
+    scale = "log"
+
+
+class Lin( float ):
+    """A step's value whose curve is drawn on a linear scale, whatever errand would guess from its values."""
+    scale = "lin"
+
+
 def step( text: str | None = None, *, done: float | None = None, **values ):
     """Where the run is: `text` as a person reads it, `done` a fraction from 0 to 1, and named numbers, one curve each.
-    Everything is optional; the text stays until another one is given."""
-    event = { k: float( v ) for k, v in values.items() }     # a curve is made of numbers
+    Everything is optional; the text stays until another one is given. A value given as `Log( x )` or `Lin( x )` says on
+    which scale its curve is drawn."""
+    event, scales = { }, { }
+    for k, v in values.items():
+        x = float( v )                                       # a curve is made of numbers
+        if math.isfinite( x ):                               # JSON has no inf nor nan: a line holding one would not be read
+            event[ k ] = x
+        if isinstance( v, ( Log, Lin ) ):
+            scales[ k ] = v.scale
+    if scales:
+        event[ "scales" ] = scales
     if text is not None:
         event[ "text" ] = str( text )
-    if done is not None:
+    if done is not None and math.isfinite( float( done ) ):
         event[ "done" ] = float( done )
     journal = _current()
     if journal is not None and event:

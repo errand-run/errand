@@ -44,6 +44,8 @@ What it shows, as it happens:
 - **the console**, stdout and stderr, as the program writes them;
 - **where the run is**: the text and bar of its last [step](./steps), the estimated end, how long
   since the last step ( a run that hangs shows ), a curve per value it reports;
+- **its curves**, drawn: the entry `steps`, after the console. A click on a value among the facts shows or
+  hides its [plot](./steps#the-curves);
 - **its views**: the files it names with [`errand.view`](./steps#view-a-file-that-evolves), an image,
   an SVG, an HTML page, brought back from the machine that runs it as soon as they change, and shown
   in place. A directory that carries its own page ( `errand.Static` ) is served as it is, while the

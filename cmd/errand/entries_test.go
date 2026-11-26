@@ -665,6 +665,7 @@ func (b *lockedBuffer) String() string {
 func TestAskedOfABatchSystem(t *testing.T) {
 	p := newPlace(t)
 	p.env = append(p.env, python(t)...)
+	p.env = append(p.env, "CUDA_VISIBLE_DEVICES=") // no card, whatever runs this: `require` would print those the run holds
 	slurm := p.slurm()
 	asked := p.launchers()
 	p.write("errand-envs.py", `import errand

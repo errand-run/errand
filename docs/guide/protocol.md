@@ -1,7 +1,7 @@
 # What a run says, in any language
 
 ```bash
-"$ERRAND" say step "iteration 41" --done 0.41 residual=3e-7
+"$ERRAND" say step "iteration 41" --done 0.41 residual=3e-7:log
 "$ERRAND" say view convergence.html --title "Convergence"
 "$ERRAND" say result seconds=1.52 primes=9592
 ```
@@ -41,6 +41,13 @@ Any other `ERRAND_…` variable is errand's own, and may change.
 `t` is the time in seconds, `text` where it is, `done` how far, from 0 to 1. Any other key whose
 value is a number is a curve. → [Where a run is: steps](./steps)
 
+`scales`, an object, says on which [scale](./steps#the-scale-of-a-curve) some curves are drawn, `"log"` or
+`"lin"`; not said, errand guesses:
+
+```json
+{"t": 1763220000.95, "residual": 2.1e-07, "scales": {"residual": "log"}}
+```
+
 **A view** is a file of the run worth looking at as it evolves, or a directory. Write it whole
 ( beside, then renamed: nobody sees half of it ), then name it, by its path from the run's directory:
 
@@ -76,7 +83,7 @@ as the run's own exit code. → [Sharing a machine](./machine#the-run-asks-from-
 `errand say` writes those lines for whoever would rather not:
 
 ```bash
-"$ERRAND" say step [TEXT] [--done X] [NAME=NUMBER ...]
+"$ERRAND" say step [TEXT] [--done X] [NAME=NUMBER[:log|:lin] ...]
 "$ERRAND" say view PATH [--title TITLE] [--last FILE ...]
 "$ERRAND" say result NAME=VALUE ...
 ```
@@ -93,7 +100,7 @@ as the run's own exit code. → [Sharing a machine](./machine#the-run-asks-from-
 ```cpp
 #include <errand/say.hpp>
 
-errand::step( "iteration 41", 0.41, { { "residual", 3e-7 } } );
+errand::step( "iteration 41", 0.41, { { "residual", errand::Log( 3e-7 ) }, { "cfl", 0.8 } } );
 errand::view( "convergence.html", "Convergence" );
 errand::result( "seconds", 1.52 );
 ```

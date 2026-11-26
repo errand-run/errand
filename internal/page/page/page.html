@@ -170,6 +170,32 @@ h3 { font-size: 12px; color: var(--dim); font-weight: 600; margin: 14px 0 4px; t
 .out.in .n { color: var(--fg); } .out.dir .n { color: var(--acc); } .out.cur { box-shadow: inset 2px 0 0 var(--acc); }
 .out.in.note { cursor: default; color: var(--dim); }
 .crumb { color: var(--acc); cursor: pointer; border-radius: 3px; } .crumb:hover { text-decoration: underline; }
+/* the curves of a run's steps: a line of the facts is a switch, "steps" draws those on, one small plot each */
+.facts .cv { display: contents; cursor: pointer; }
+.facts .cv > span:hover { color: var(--acc); }
+.facts .cv .k::before { content: ""; display: inline-block; width: 7px; height: 7px; margin-right: 6px; border-radius: 2px; border: 1px solid var(--faint); }
+.facts .cv.on .k { color: var(--fg); }
+.facts .cv.on .k::before { background: var(--acc); border-color: var(--acc); }
+.cbar { display: flex; flex-wrap: wrap; gap: 4px 6px; margin: 0 0 8px; }
+.cbar button { color: var(--dim); }
+.cbar button.on { color: var(--fg); border-color: var(--acc); }
+.plots { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 270px), 1fr)); gap: 10px 18px; }
+.plot { min-width: 0; }
+.phead { display: flex; gap: 10px; align-items: baseline; }
+.phead b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.phead .pv { color: var(--dim); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.phead button { margin-left: auto; padding: 0 6px; font-size: 11px; line-height: 1.4; color: var(--dim); }
+.pl { position: relative; touch-action: pan-y; overflow: hidden; }
+.pl svg { display: block; overflow: visible; }
+.pl text { fill: var(--dim); font-size: 11px; font-variant-numeric: tabular-nums; }
+.pl .grid { stroke: var(--line); stroke-width: 1; }
+.pl .axis { stroke: var(--faint); stroke-width: 1; }
+.pl .ln { fill: none; stroke: var(--acc); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.pl .pt { fill: var(--acc); stroke: var(--bg); stroke-width: 2; }
+.pl .cross { stroke: var(--dim); stroke-width: 1; stroke-dasharray: 3 3; }
+.pl .tip { position: absolute; top: 2px; pointer-events: none; background: var(--bg); border: 1px solid var(--line); border-radius: 5px;
+           padding: 0 7px; white-space: nowrap; font-size: 11px; }
+.pl .tip span { color: var(--dim); margin-left: 8px; }
 /* a record, as a tree that folds */
 .js { margin: 2px 0 2px 2px; line-height: 1.55; }
 .js .jr { display: flex; gap: 0 8px; align-items: baseline; padding-left: calc(var(--d) * 18px); border-radius: 4px; }
@@ -268,7 +294,7 @@ const KEYS = [
   ["→  ←", "unfold, fold: a machine, a day · ← on a row inside: up to what holds it"],
   ["tab", "the other pane: the list, or the detail ( its outputs: the one chosen is shown below )"],
   ["→  ←", "in the detail: unfold, fold a folder"],  ["backspace", "in the pane below: back to what it showed before"],
-  ["click", "a row: its detail · a file, a folder: shown in the pane below"],
+  ["click", "a row: its detail · a file, a folder: shown in the pane below · a curve's value: its plot, on or off"],
   ["double-click, ⌘-click", "open it: a page or an image in a tab, a text in an editor, a folder in the Finder"],
   ["right-click", "everything that can be done with it"],
   ["enter  o", "open the output chosen ( as a double-click )"], ["e", "the output chosen in an editor of this machine"],
@@ -536,6 +562,7 @@ const ICONS = {
   file: SVG('<path d="M9.5 1.8H4.2c-.7 0-1.2.5-1.2 1.2v10c0 .7.5 1.2 1.2 1.2h7.6c.7 0 1.2-.5 1.2-1.2V5.3z"/><path d="M9.5 1.8v3.5H13"/>'),
   text: SVG('<path d="M9.5 1.8H4.2c-.7 0-1.2.5-1.2 1.2v10c0 .7.5 1.2 1.2 1.2h7.6c.7 0 1.2-.5 1.2-1.2V5.3z"/><path d="M9.5 1.8v3.5H13M5.6 8.5h4.8M5.6 11h3.4"/>'),
   console: SVG('<rect x="1.5" y="2.5" width="13" height="11" rx="1.2"/><path d="m4.5 6.3 2 1.7-2 1.7M8 10.2h3.5"/>'),
+  curves: SVG('<path d="M2.2 2v12h12"/><path d="M3.8 4.5c2 .3 2.2 4.6 4.6 5.3s3.6 1.2 5.2 1.5"/>'),
   image: SVG('<rect x="1.8" y="2.5" width="12.4" height="11" rx="1.2"/><circle cx="5.6" cy="6" r="1.2"/><path d="m2 12 3.8-3.6 2.6 2.4 2-1.8 3.8 3.2"/>'),
   page: SVG('<circle cx="8" cy="8" r="6.2"/><path d="M1.8 8h12.4M8 1.8c1.8 2 1.8 10.4 0 12.4M8 1.8c-1.8 2-1.8 10.4 0 12.4"/>'),
   host: SVG('<rect x="2" y="2" width="12" height="5" rx="1"/><rect x="2" y="9" width="12" height="5" rx="1"/><path d="M4.5 4.5h.01M4.5 11.5h.01"/>'),
@@ -584,6 +611,11 @@ function runHead(f) {
 }
 function factHtml(r) {
   if (r.k == "said" && det.saidAt && !det.duration) r = {k: "said", v: ago(det.now + Date.now() / 1000 - det.at - det.saidAt) + " ago"};    // ( ticking here )
+  if (r.curve && hasSteps()) {                             // a curve: a click shows it, or hides it, among the steps' plots
+    const on = curveOn(r.k);
+    return `<span class="cv${on ? " on" : ""}" data-curve="${esc(r.k)}" title="click: ${on ? "hide" : "show"} its curve">` +
+           `<span class="k">${esc(r.k)}</span><span class="v">${esc(r.v)}</span></span>`;
+  }
   const v = isPath(r.v) ? `<span class="path${view && view.path == r.v ? " shown" : ""}" data-path="${esc(r.v)}" title="click: show · double-click: open · right-click: more">${esc(r.v)}</span>` : esc(r.v);
   return `<span class="k">${esc(r.k)}</span><span class="v">${v}</span>`;
 }
@@ -631,6 +663,11 @@ function outputHtml(rs) {
          `<span class="tw"${r.dir ? ` data-tree="${esc(p)}"` : ""}>${r.dir ? (on ? "▾" : "▸") : ""}</span>` +
          `<span class="n">${r.look == "static" ? ICONS.page : r.dir ? ICONS.folder : iconOf(r.label)}${esc(r.label)}${r.dir && !r.look ? "/" : ""}</span><span class="d">${r.path ? (r.look == "static" && !r.url ? "on its way" : esc(size)) : lines}</span></div>` +
          (on ? insideHtml(p, 1) : "");
+    if (!r.path && hasSteps()) {                          // after the console: the curves of its steps
+      const all = det.curves.length;
+      h += `<div class="out${view && view.steps ? " sel" : ""}" data-steps="1" data-path="" title="the curves of its steps"><span class="tw"></span>` +
+           `<span class="n">${ICONS.curves}steps</span><span class="d">${all} curve${all == 1 ? "" : "s"}</span></div>`;
+    }
   }
   if (empties.length) h += `<div class="out empty"><span class="n">${ICONS.file}${empties.map(([i, r, p]) =>
       `<span class="e${view && view.path == p ? " sel" : ""}" data-out="${i}" data-path="${esc(p)}">${esc(r.label)}</span>`).join(", ")}</span><span class="d">empty</span></div>`;
@@ -641,7 +678,8 @@ function drawDetail() {
   if (!sel) { put(d, `<span class="note">choose a row</span>`); return; }
   if (!det) { put(d, `<span class="note">reading…</span>`); return; }
   const can = det.can || {}, row = rows.find(r => r.key == sel);
-  const facts = det.rows.filter(r => r.kind == "plain" && r.k !== undefined), f = Object.fromEntries(facts.map(r => [r.k, r.v]));
+  const facts = det.rows.filter(r => r.kind == "plain" && r.k !== undefined);
+  const f = Object.fromEntries(facts.filter(r => !r.curve).map(r => [r.k, r.v]));   // ( a curve may be named as a fact is )
   const isWork = det.kind == "proc" || det.kind == "run";
   let h = isWork ? runHead(f) : `<h2>${esc(det.title)}</h2>`;
   let tools = "";
@@ -659,8 +697,8 @@ function drawDetail() {
   if (can.forget) tools += `<button data-act="forget">forget<kbd>f</kbd></button>`;
   if (isWork && !JOB) tools += `<a class="btn" href="/job?${esc(new URLSearchParams({key: sel}))}" target="_blank" rel="noopener" title="this run as a page of its own: its outputs left, the one chosen right">page ↗</a>`;
   if (tools) h += `<div class="tools">${tools}</div>`;
-  const shownFacts = facts.filter(r => !RARE.has(r.k) && !(isWork && COVERED.has(r.k)));
-  const rare = facts.filter(r => RARE.has(r.k) || (isWork && COVERED.has(r.k) && isPath(r.v)) || (isWork && r.k == "what"))
+  const shownFacts = facts.filter(r => r.curve || (!RARE.has(r.k) && !(isWork && COVERED.has(r.k))));
+  const rare = facts.filter(r => !r.curve && (RARE.has(r.k) || (isWork && COVERED.has(r.k) && isPath(r.v)) || (isWork && r.k == "what")))
                     .concat(isWork && det.started ? [{k: "started", v: `${hhmm(det.started, det.now)} · ${f.started || ""}`}] : []);
   if (shownFacts.length) h += `<div class="facts">${shownFacts.map(factHtml).join("")}</div>`;
   if (rare.length) h += (showMore ? `<div class="facts">${rare.map(factHtml).join("")}</div>` : "") +
@@ -696,6 +734,7 @@ async function detail(now) {
     if (jobPath && jobPath == det.console) { showConsole(); jobPath = null; }     // the console, as the page draws it
     else if (jobPath) { show(jobPath, false); jobPath = null; }
     else if (!view || view.key != sel) autoView();
+    else if (view.steps) { if (hasSteps()) { drawView(); readCurves(); } else autoView(); }
     else if (view.console) { if (!consoleBig[sel] && looks().length) autoView(); else showConsole(); }
     else if (view.auto && looks().length && looks()[0].path != view.path) autoView();
     else show(view.path, view.dir, true);
@@ -716,7 +755,12 @@ let viewed = [];                                        // what the pane showed 
 function back() {
   const v = viewed.pop();
   if (!v) return askConsole();
-  v.console ? showConsole() : show(v.path, v.dir, false, true);
+  v.console ? showConsole() : v.steps ? askSteps(true) : show(v.path, v.dir, false, true);
+}
+function remember() {                                    // what the pane shows, to come back to it
+  if (!view || view.key != sel) return;
+  viewed.push({path: view.path, dir: view.dir, console: view.console, steps: view.steps});
+  if (viewed.length > 50) viewed.shift();
 }
 function closeView() { viewed = []; treeCur = null; view = null; put($("vh"), ""); put($("vb"), ""); }
 function consoleRows() {                                // what the detail rows say after the outputs: the console
@@ -734,13 +778,14 @@ function consoleRows() {                                // what the detail rows 
 function showConsole() { view = {key: sel, console: true}; drawView(); drawDetail(); }
 // ── the run's dashboard ( grill/dashboard ): what the run declared to look at, in big, the console in a strip below ──
 const consoleBig = {};                                  // run key -> the console asked in big ( a click on it )
-function askConsole() { consoleBig[sel] = true; showConsole(); }
+function askConsole() { consoleBig[sel] = true; delete stepsBig[sel]; showConsole(); }
 function looks() {                                      // ready, in the order: a page served as it is first, then the latest
   if (!det) return [];
   return det.rows.filter(r => r.kind == "output" && r.look && r.ready && r.path)
     .sort((a, b) => (b.look == "static") - (a.look == "static") || (b.t || 0) - (a.t || 0));
 }
 function autoView() {
+  if (stepsBig[sel] && hasSteps()) return askSteps(true);
   const L = looks();
   if (L.length && !consoleBig[sel]) { show(L[0].path, false); if (view) view.auto = true; }
   else showConsole();
@@ -776,11 +821,8 @@ function drawStrip() {                                  // the tabs and the cons
 async function show(path, dir, again, backed) {
   if (!path || !sel) return;
   const key = sel;
-  if (!again) { consoleBig[key] = false; treeCur = null; }
-  if (!again && !backed && view && view.path != path && view.key == key) {
-    viewed.push({path: view.path, dir: view.dir, console: view.console});
-    if (viewed.length > 50) viewed.shift();
-  }
+  if (!again) { consoleBig[key] = false; delete stepsBig[key]; treeCur = null; }
+  if (!again && !backed && view && view.path != path) remember();
   const r = outputs().find(r => r.path == path);
   if (r && r.look == "static" && !r.url) {                // brought here first: shown as soon as it is
     if (!view || view.path != path || !view.waiting) { view = {key, path, waiting: true}; $("right").classList.add("viewing"); drawView(); drawDetail(); }
@@ -833,6 +875,7 @@ function drawView() {
       v.scrollTop = v.scrollHeight;                     // the end of a console that grows stays in view
     return;
   }
+  if (view.steps) return drawSteps(body);
   const {path, dir, got} = view, name = path.split("/").pop();
   const parent = path.slice(0, path.lastIndexOf("/")) || "/";
   const backB = viewed.length ? `<button data-v="back" title="what was shown before ( backspace )">←</button>` : "";
@@ -899,6 +942,7 @@ function vAction(what, path, dir) {
   else if (what == "open") open(path, dir);
   else if (what == "close") askConsole();
   else if (what == "back") back();
+  else if (what == "stepsx") { keep("stepsX", load("stepsX", "time") == "time" ? "point" : "time"); hover = null; drawView(); }
   else if (what == "raw") { keep("jsonRaw", !load("jsonRaw", false)); drawView(); }
   else if (what == "unfold" || what == "fold") { jsonAll.set(path, what); jsonTurned.delete(path); drawView(); }
 }
@@ -907,12 +951,12 @@ function pick(n) {                                       // an output chosen wit
   const os = lines(); if (!os.length) return;
   const o = os[Math.max(0, Math.min(os.length - 1, n))];
   if (o.dataset.dir && !o.dataset.look) { treeCur = o.dataset.path; drawDetail(); }
-  else o.dataset.console ? askConsole() : show(o.dataset.path, false);
+  else o.dataset.console ? askConsole() : o.dataset.steps ? askSteps() : show(o.dataset.path, false);
   document.querySelector("#detail .out.cur, #detail .out.sel, #detail .out .e.sel")?.scrollIntoView({block: "nearest"});
 }
 // the output shown below is the one chosen: one place says it, the keys move from it ( a folder, when they are on one )
 function shownIndex() {
-  return lines().findIndex(o => treeCur ? o.dataset.path == treeCur : view && (o.dataset.console ? view.console : !view.console && view.path == o.dataset.path));
+  return lines().findIndex(o => treeCur ? o.dataset.path == treeCur : view && (o.dataset.console ? view.console : o.dataset.steps ? view.steps : !view.console && view.path == o.dataset.path));
 }
 function foldOutput(on) {                                // → ← in the detail: the folder the keys are on, or what holds the file
   const o = lines()[shownIndex()]; if (!o) return;
@@ -921,7 +965,196 @@ function foldOutput(on) {                                // → ← in the detai
   const up = p && p.slice(0, p.lastIndexOf("/"));
   if (!on && up && treeOpen.has(up)) { treeCur = up; drawDetail(); }
 }
-function chosenPath() { return view && !view.dir && !view.console ? view.path : det && det.console; }
+function chosenPath() { return view && view.steps ? null : view && !view.dir && !view.console ? view.path : det && det.console; }
+
+// ── the curves of the steps ────────────────────────────────────────────────
+// One small plot each, on its own scale. Which are shown, and on which scale, is kept by script: the next run of it opens
+// as this one was left. A scale chosen here passes over the one the run said ( `errand.Log` ), which passes over errand's guess.
+const stepsBig = {};                                     // run key -> its steps asked in big
+const SHOWN_AT_FIRST = 6;
+let hover = null;                                        // { x, from }: where the hand is, on the shared axis
+const curves = () => (det && det.curves) || [];
+const drawable = c => c.n > 1 && c.varies;               // worth a plot: it moves
+const hasSteps = () => curves().some(drawable);
+function scriptKey() { return (det && (det.file || (det.rows.find(r => r.k == "what" && !r.curve) || {}).v)) || ""; }
+const chosenBy = kind => load(kind, {})[scriptKey()] || {};
+function choiceKept(kind, name, v) { const all = load(kind, {}), k = scriptKey(); all[k] = {...all[k], [name]: v}; keep(kind, all); }
+function curveOn(name) {
+  const said = chosenBy("curves")[name];
+  return said !== undefined ? said : curves().filter(drawable).slice(0, SHOWN_AT_FIRST).some(c => c.name == name);
+}
+const scaleOf = c => chosenBy("scales")[c.name] || c.scale;
+function toggleCurve(name) { choiceKept("curves", name, !curveOn(name)); }
+function askSteps(backed) {
+  if (!sel || !hasSteps()) return;
+  consoleBig[sel] = false; stepsBig[sel] = true; treeCur = null;
+  if (!view || !view.steps || view.key != sel) {
+    if (!backed) remember();
+    view = {key: sel, steps: true, got: {}}; hover = null; $("right").classList.add("viewing");
+  }
+  drawView(); drawDetail(); readCurves();
+}
+let curving = false, curvesAgain = false;
+async function readCurves() {                            // the points of those shown, again as the run says more
+  if (!view || !view.steps) return;
+  if (curving) { curvesAgain = true; return; }
+  const key = view.key, names = curves().filter(c => curveOn(c.name)).map(c => c.name);
+  if (!names.length) return;
+  curving = true;
+  try {
+    const got = await ask("/curves?" + new URLSearchParams([["key", key], ...names.map(n => ["name", n])]));
+    if (view && view.steps && view.key == key) { view.got = got.curves; view.error = null; drawView(); }
+  } catch (e) { if (view && view.steps && view.key == key) { view.error = e.message; drawView(); } }
+  curving = false;
+  if (curvesAgain) { curvesAgain = false; readCurves(); }
+}
+function drawSteps(body) {
+  const shownNow = curves().filter(c => curveOn(c.name)), x = load("stepsX", "time");
+  put($("vh"), `<div class="vhead">${viewed.length ? `<button data-v="back" title="what was shown before ( backspace )">←</button>` : ""}` +
+    `<span class="where"><b>steps</b></span><button data-v="stepsx" title="the horizontal axis: the time since the first step, or the points one after the other">x: ${x}</button>` +
+    `<button data-v="close" title="back to the console ( esc )">×</button></div>`);
+  put(body, `<div class="cbar">${curves().map(c => `<button class="${curveOn(c.name) ? "on" : ""}" data-curve="${esc(c.name)}" title="click: ${curveOn(c.name) ? "hide" : "show"}">${esc(c.name)}</button>`).join("")}</div>` +
+    (view.error ? `<div class="broken">${esc(view.error)}</div>` : "") +
+    (shownNow.length ? `<div class="plots">${shownNow.map(c => `<div class="plot"><div class="phead"><b title="${esc(c.name)}">${esc(c.name)}</b><span class="pv"></span>` +
+        `<button data-scale="${esc(c.name)}" title="the scale of its axis: click for ${scaleOf(c) == "log" ? "linear" : "log"}">${scaleOf(c)}</button></div><div class="pl" data-plot="${esc(c.name)}"></div></div>`).join("")}</div>`
+      : `<div class="note">no curve chosen: click one, here or among the values</div>`));
+  drawStrip();
+  drawPlots();
+}
+function drawPlots() {
+  if (!view || !view.steps) return;
+  const els = [...document.querySelectorAll("#view .pl")], grid = document.querySelector("#view .plots");
+  if (!els.length) return;
+  const room = $("dbody") || $("view");                  // as high as there is room for, within reason
+  const cols = Math.max(1, Math.min(els.length, Math.floor((grid.clientWidth + 18) / (Math.min(grid.clientWidth, 270) + 18))));
+  const above = grid.getBoundingClientRect().top - room.getBoundingClientRect().top + room.scrollTop;
+  const high = Math.floor((room.clientHeight - above) / Math.ceil(els.length / cols)) - 34;
+  const height = Math.max(130, Math.min(460, high));
+  for (const el of els) el.style.height = height + "px";
+  for (const el of els) {
+    const c = curves().find(c => c.name == el.dataset.plot), data = view.got && view.got[el.dataset.plot];
+    if (!c || !data) { el._plot = null; put(el, `<div class="note">reading…</div>`); continue; }
+    plot(el, data, scaleOf(c) == "log", load("stepsX", "time"));
+  }
+  paintHover();
+}
+function niceStep(span, most) {
+  const raw = span / most, p = 10 ** Math.floor(Math.log10(raw));
+  return [1, 2, 5, 10].map(m => m * p).find(s => s >= raw);
+}
+function ticksIn(lo, hi, step) {
+  const out = [];
+  for (let k = Math.ceil(lo / step - 1e-9); k * step <= hi + step * 1e-9; k++) out.push(k * step);
+  return out;
+}
+const shortExp = s => s.replace(/\.?0+e/, "e").replace("e+", "e");
+function fmtValue(v) {
+  const a = Math.abs(v);
+  return v == 0 ? "0" : a >= 1e6 || a < 1e-3 ? shortExp(v.toExponential(3)) : String(+v.toPrecision(5));
+}
+function linearTicks(lo, hi, most) {                     // [value, label], with the digits the step asks for
+  const step = niceStep(hi - lo, most), ticks = ticksIn(lo, hi, step);
+  const big = Math.max(Math.abs(lo), Math.abs(hi)), digits = Math.floor(Math.log10(step) + 1e-9);
+  return ticks.map(v => {
+    if (Math.abs(v) < step / 1e3) return [0, "0"];
+    if (big >= 1e6 || big < 1e-3) return [v, shortExp(v.toExponential(Math.max(0, Math.min(12, Math.floor(Math.log10(Math.abs(v))) - digits))))];
+    return [v, v.toFixed(Math.max(0, Math.min(12, -digits)))];
+  });
+}
+function logTicks(lo, hi, most) {                        // lo, hi: the values at the ends
+  const named = v => [v, v >= 1e4 || v < 1e-2 ? shortExp(v.toExponential(0)) : String(+v.toPrecision(1))];
+  const first = Math.ceil(Math.log10(lo) - 1e-9), last = Math.floor(Math.log10(hi) + 1e-9);
+  if (last - first >= 1) {
+    const stride = Math.ceil((last - first + 1) / most), out = [];
+    for (let d = first; d <= last; d += stride) out.push(named(10 ** d));
+    return out;
+  }
+  const out = [];
+  for (let d = first - 1; d <= last + 1; d++) for (const m of [1, 2, 5]) { const v = m * 10 ** d; if (v >= lo && v <= hi) out.push(named(v)); }
+  return out.length >= 3 ? out : linearTicks(lo, hi, most);
+}
+const TIMES = [.001, .002, .005, .01, .02, .05, .1, .2, .5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200, 10800, 21600, 43200, 86400];
+function fmtTime(s, fine) {
+  if (s < 60) return `${+s.toFixed(fine ? 2 : 3)} s`;
+  if (s < 3600) { const m = Math.floor(s / 60), r = Math.round(s % 60); return r || fine ? `${m} min ${String(r).padStart(2, "0")}` : `${m} min`; }
+  const h = Math.floor(s / 3600), m = Math.round(s % 3600 / 60);
+  return m || fine ? `${h} h ${String(m).padStart(2, "0")}` : `${h} h`;
+}
+function xTicks(lo, hi, most, by) {
+  if (by == "point") return ticksIn(lo, hi, Math.max(1, niceStep(hi - lo, most))).map(v => [v, String(v)]);
+  const step = TIMES.find(t => (hi - lo) / t <= most) || niceStep(hi - lo, most);
+  return ticksIn(lo, hi, step).map(v => [v, fmtTime(v)]);
+}
+function plot(el, data, log, by) {
+  const xs = by == "point" ? data.i.map(i => i + 1) : data.t, vs = data.v;
+  const ys = vs.map(v => log ? (v > 0 ? Math.log10(v) : null) : v);       // what has no place on a log axis: a gap
+  let lo = Infinity, hi = -Infinity;
+  for (const y of ys) if (y !== null) { lo = Math.min(lo, y); hi = Math.max(hi, y); }
+  const left_out = ys.filter(y => y === null).length;
+  if (lo > hi) { el._plot = null; put(el, `<div class="note">nothing positive to draw on a log scale</div>`); return; }
+  if (hi == lo) { const half = log ? .5 : Math.abs(lo) / 10 || 1; lo -= half; hi += half; }
+  else { const pad = .04 * (hi - lo); lo -= pad; hi += pad; }
+  const W = el.clientWidth, H = el.clientHeight;
+  const most = Math.max(2, Math.floor(H / 42));
+  const yt = log ? logTicks(10 ** lo, 10 ** hi, most) : linearTicks(lo, hi, most);
+  const L = 10 + 6.7 * Math.max(...yt.map(t => t[1].length), 1), R = 10, T = 8, B = 20;
+  let x0 = xs[0], x1 = xs[xs.length - 1];
+  for (const x of xs) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); }   // ( several processes may say one curve )
+  if (x1 == x0) x1 = x0 + 1;
+  const X = x => L + (W - L - R) * (x - x0) / (x1 - x0), Y = y => T + (H - T - B) * (hi - y) / (hi - lo);
+  const n = v => v.toFixed(1);
+  let h = `<svg width="${W}" height="${H}" role="img" aria-label="${esc(el.dataset.plot)}">`;
+  for (const [v, label] of yt) { const y = n(Y(log ? Math.log10(v) : v)); h += `<line class="grid" x1="${L}" x2="${W - R}" y1="${y}" y2="${y}"/><text x="${L - 6}" y="${y}" dy=".35em" text-anchor="end">${esc(label)}</text>`; }
+  h += `<line class="axis" x1="${L}" x2="${W - R}" y1="${H - B}" y2="${H - B}"/>`;
+  for (const [v, label] of xTicks(x0, x1, Math.max(2, Math.floor((W - L - R) / 62)), by)) {
+    const x = X(v), half = 3.4 * label.length;
+    h += `<line class="axis" x1="${n(x)}" x2="${n(x)}" y1="${H - B}" y2="${H - B + 3}"/><text x="${n(Math.max(half, Math.min(W - half, x)))}" y="${H - 5}" text-anchor="middle">${esc(label)}</text>`;
+  }
+  let d = "", pen = false, alone = [];
+  ys.forEach((y, k) => {
+    if (y === null) { pen = false; return; }
+    d += (pen ? "L" : "M") + n(X(xs[k])) + " " + n(Y(y));
+    if (!pen && (k + 1 >= ys.length || ys[k + 1] === null)) alone.push(k);   // a point with nothing to be joined to
+    pen = true;
+  });
+  h += `<path class="ln" d="${d}"/>` + alone.slice(0, 200).map(k => `<circle class="pt" cx="${n(X(xs[k]))}" cy="${n(Y(ys[k]))}" r="3.5"/>`).join("");
+  h += `<line class="cross" y1="${T}" y2="${H - B}" visibility="hidden"/><circle class="pt hot" r="4.5" visibility="hidden"/></svg><div class="tip" hidden></div>`;
+  el._plot = {xs, vs, ys, X, Y, x0, x1, L, R, W, by, left_out, last: vs[vs.length - 1]};
+  put(el, h);
+}
+function paintHover() {                                  // the same place on every plot: one axis for all
+  for (const el of document.querySelectorAll("#view .pl")) {
+    const p = el._plot, pv = el.parentNode.querySelector(".pv");
+    if (!p) { pv.textContent = ""; continue; }
+    const cross = el.querySelector(".cross"), dot = el.querySelector(".hot"), tip = el.querySelector(".tip");
+    if (!cross) continue;
+    let k = -1;
+    if (hover && hover.x >= p.x0 && hover.x <= p.x1)
+      for (let i = 0; i < p.xs.length; i++) if (k < 0 || Math.abs(p.xs[i] - hover.x) < Math.abs(p.xs[k] - hover.x)) k = i;
+    pv.textContent = fmtValue(k < 0 ? p.last : p.vs[k]) + (k < 0 && p.left_out ? `  ( ${p.left_out} ≤ 0 not drawn )` : "");
+    cross.setAttribute("visibility", k < 0 ? "hidden" : "visible");
+    dot.setAttribute("visibility", k < 0 || p.ys[k] === null ? "hidden" : "visible");
+    tip.hidden = k < 0 || hover.from != el.dataset.plot;
+    if (k < 0) continue;
+    const x = p.X(p.xs[k]);
+    cross.setAttribute("x1", x); cross.setAttribute("x2", x);
+    if (p.ys[k] !== null) { dot.setAttribute("cx", x); dot.setAttribute("cy", p.Y(p.ys[k])); }
+    if (!tip.hidden) {
+      tip.innerHTML = `${esc(fmtValue(p.vs[k]))}<span>${esc(p.by == "point" ? "point " + p.xs[k] : "at " + fmtTime(p.xs[k], true))}</span>`;
+      tip.style.left = (x + 10 + tip.offsetWidth > p.W ? Math.max(0, x - 10 - tip.offsetWidth) : x + 10) + "px";   // ( narrow: over the plot )
+    }
+  }
+}
+$("view").addEventListener("pointermove", e => {
+  if (!view || !view.steps) return;
+  const el = e.target.closest(".pl"), p = el && el._plot;
+  if (!p) { if (hover) { hover = null; paintHover(); } return; }
+  const at = e.clientX - el.getBoundingClientRect().left;
+  hover = {x: Math.max(p.x0, Math.min(p.x1, p.x0 + (p.x1 - p.x0) * (at - p.L) / (p.W - p.L - p.R))), from: el.dataset.plot};
+  paintHover();
+});
+$("view").addEventListener("pointerleave", () => { if (hover) { hover = null; paintHover(); } });
+new ResizeObserver(() => drawPlots()).observe($("view"));
 
 // ── colours of a source ────────────────────────────────────────────────────
 // a few languages, by their names; enough to read a script, a config, a record -- not a compiler
@@ -1304,6 +1537,8 @@ $("detail").addEventListener("click", e => {
   if (b && b.dataset.act == "runs_remove") return removable().length ? removeRuns(b.dataset.how, removable()) : say("nothing to remove here");
   if (b) return act(b.dataset.act, b.dataset.how ? {how: b.dataset.how} : b.dataset.copy ? {copy: b.dataset.copy} : undefined);
   if (e.target.closest("#more")) { showMore = !showMore; keep("more", showMore); return drawDetail(); }
+  const cu = e.target.closest("[data-curve]");
+  if (cu) { if (String(getSelection())) return; toggleCurve(cu.dataset.curve); return askSteps(); }
   const c = e.target.closest(".chip.click");
   if (c && c.dataset.machine) { const key = `["machine", ${JSON.stringify(c.dataset.machine)}, null]`;
     tab = "machines"; keep("tab", tab); sel = key; det = null; closeView(); setFocus("list"); return refresh(); }
@@ -1314,11 +1549,15 @@ $("detail").addEventListener("click", e => {
   const o = e.target.closest(".out .e, .out:not(.empty)");
   if (o && o.dataset.dir && !o.dataset.look && !opening(e)) { setFocus("detail"); treeCur = o.dataset.path; return toggleTree(o.dataset.path); }
   if (o && o.classList.contains("note")) return;
+  if (o && o.dataset.steps) { setFocus("detail"); return askSteps(); }
   if (o) { setFocus("detail"); return o.dataset.console && !opening(e) ? askConsole() : pathClick(e, o); }
   const p = e.target.closest(".path"); if (p) return pathClick(e, p);
 });
 $("view").addEventListener("click", e => {
   const b = e.target.closest("button[data-v]"); if (b) return vAction(b.dataset.v, view.path, view.dir);
+  const cu = e.target.closest("button[data-curve]"); if (cu) { toggleCurve(cu.dataset.curve); drawView(); drawDetail(); return readCurves(); }
+  const sc = e.target.closest("button[data-scale]");
+  if (sc) { const c = curves().find(c => c.name == sc.dataset.scale); choiceKept("scales", c.name, scaleOf(c) == "log" ? "lin" : "log"); return drawView(); }
   const cr = e.target.closest(".crumb"); if (cr) return pathClick(e, cr);
   const js = e.target.closest("[data-json]"); if (js && !String(getSelection())) return turnJson(js.dataset.json);
   const ent = e.target.closest(".ent"); if (ent) return pathClick(e, ent);

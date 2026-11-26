@@ -258,7 +258,8 @@ func TestWhatARunIsHandedAndSays(t *testing.T) {
 	p := newPlace(t)
 	p.write("job.sh", `#!/bin/sh
 echo "protocol $ERRAND_PROTOCOL out ${ERRAND_OUT_DIR:-none}"
-"$ERRAND" say step "half way" --done 0.5 residual=1e-3
+"$ERRAND" say step "half way" --done 0.5 residual=1e-3:log nowhere=inf
+"$ERRAND" say step residual=2:cubic || echo "no such scale"
 echo plot > "$ERRAND_OUT_DIR/plot.txt"
 "$ERRAND" say view plot.txt --title "The plot"
 "$ERRAND" say result seconds=1.5 primes=9592
@@ -266,7 +267,7 @@ echo plot > "$ERRAND_OUT_DIR/plot.txt"
 "$ERRAND" say nonsense || echo "refused $?"
 `)
 	o := p.errand("", "run", "-o", "job.sh")
-	if o.code != 0 || !strings.Contains(o.out, "protocol 1 out "+o.leaf) || !strings.Contains(o.out, "refused 2") {
+	if o.code != 0 || !strings.Contains(o.out, "protocol 1 out "+o.leaf) || !strings.Contains(o.out, "refused 2") || !strings.Contains(o.out, "no such scale") {
 		t.Fatalf("exit %d, %q %q", o.code, o.out, o.err)
 	}
 	if r := o.result.Results; r["seconds"] != 2.5 || r["primes"] != 9592.0 || r["method"] != "newton" {
@@ -283,7 +284,7 @@ echo plot > "$ERRAND_OUT_DIR/plot.txt"
 		}
 		lines = append(lines, one)
 	}
-	if len(lines) != 2 || lines[0]["text"] != "half way" || lines[0]["done"] != 0.5 || lines[0]["residual"] != 0.001 ||
+	if len(lines) != 2 || lines[0]["text"] != "half way" || lines[0]["done"] != 0.5 || lines[0]["residual"] != 0.001 || fmt.Sprint(lines[0]["scales"]) != "map[residual:log]" || lines[0]["nowhere"] != nil ||
 		lines[1]["view"] != "plot.txt" || lines[1]["title"] != "The plot" {
 		t.Errorf("its journal: %v", lines)
 	}

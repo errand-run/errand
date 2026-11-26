@@ -3,6 +3,7 @@
 //     #include <errand/say.hpp>
 //
 //     errand::step( "iteration 41", 0.41, { { "residual", 3e-7 } } );   // where it is, how far, its curves
+//     errand::step( "", -1, { { "residual", errand::Log( r ) } } );     // a curve on a log scale ( or errand::Lin )
 //     errand::view( "convergence.html", "Convergence" );                // a file of the run worth looking at
 //     errand::result( "seconds", 1.52 );                                // a number kept in its result.yaml
 //     std::string dir = errand::out_dir();                              // the run's own directory ( "out" by hand )
@@ -72,12 +73,27 @@ namespace say_detail {
 /// Whether errand runs this program ( `ERRAND_PROTOCOL` ): outside, a view says where it is, and every other call below does nothing.
 inline bool inside() { return ! say_detail::env( "ERRAND_PROTOCOL" ).empty(); }
 
+/// A curve's value: a number and, when errand is not to guess it, the scale the curve is drawn on.
+struct Value {
+    Value( double v, const char *scale = nullptr ) : v( v ), scale( scale ) {}
+    double      v;
+    const char *scale;
+};
+inline Value Log( double v ) { return { v, "log" }; }
+inline Value Lin( double v ) { return { v, "lin" }; }
+
 /// Where the run is: `text`, how far ( `done`, from 0 to 1; negative: not said ), and its curves, by name.
-inline void step( const std::string &text, double done = -1, std::initializer_list< std::pair< const char *, double > > curves = { } ) {
+inline void step( const std::string &text, double done = -1, std::initializer_list< std::pair< const char *, Value > > curves = { } ) {
     std::string line = "{\"t\": " + say_detail::number( say_detail::now() );
     if ( ! text.empty() ) line += ", \"text\": " + say_detail::quoted( text );
     if ( done >= 0 ) line += ", \"done\": " + say_detail::number( done );
-    for ( const auto &c : curves ) line += ", " + say_detail::quoted( c.first ) + ": " + say_detail::number( c.second );
+    std::string scales;
+    for ( const auto &c : curves ) {
+        line += ", " + say_detail::quoted( c.first ) + ": " + say_detail::number( c.second.v );
+        if ( c.second.scale )
+            scales += ( scales.empty() ? "" : ", " ) + say_detail::quoted( c.first ) + ": " + say_detail::quoted( c.second.scale );
+    }
+    if ( ! scales.empty() ) line += ", \"scales\": {" + scales + "}";
     say_detail::append( "ERRAND_STEPS", line + "}" );
 }
 

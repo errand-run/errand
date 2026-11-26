@@ -18,7 +18,7 @@ import (
 	"github.com/errand-run/errand/internal/reach"
 )
 
-const aServer = `import http.server, json, os, sys, time
+const aServer = `import http.server, json, os, socketserver, sys, time
 open( sys.argv[ 2 ], "a" ).write( "started\n" )
 class H( http.server.BaseHTTPRequestHandler ):
     def do_GET( self ):
@@ -26,7 +26,9 @@ class H( http.server.BaseHTTPRequestHandler ):
         body = json.dumps( { "path": self.path, "models": [ 1 ] if os.path.exists( sys.argv[ 2 ] + ".busy" ) else [ ], "x": os.environ.get( "X" ) } ).encode()
         self.send_response( 200 ); self.send_header( "Content-Length", str( len( body ) ) ); self.end_headers(); self.wfile.write( body )
     def log_message( self, *a ): pass
-http.server.ThreadingHTTPServer( ( "127.0.0.1", int( sys.argv[ 1 ] ) ), H ).serve_forever()
+class S( http.server.ThreadingHTTPServer ):
+    server_bind = socketserver.TCPServer.server_bind # ( HTTPServer's looks its address up before it listens: 30 s on some Macs )
+S( ( "127.0.0.1", int( sys.argv[ 1 ] ) ), H ).serve_forever()
 `
 
 // leaseHash: the hash of the server a lease leads to -- what `connect` is given
@@ -679,7 +681,8 @@ func TestAServerAskedByAProgram(t *testing.T) {
 	lib, _ := filepath.Abs("../../lib")
 	p.write("ask.py", `import os, subprocess, sys, time, urllib.request
 import errand
-srv, log, agents = sys.argv[ 1 : ]
+srv, log = sys.argv[ 1 : ]
+agents = os.environ[ "AGENTS" ] # ( not an argument: Linux's pkill -f would find this program too )
 def ask( url ): return urllib.request.urlopen( url, timeout = 20 ).read().decode()
 s = errand.serve( [ "python3", srv, "{port}", log ], vars = { "X": 1 }, cpus = 1, idle = "1h", busy = errand.http( "/api", field = "models" ), label = "lib" )
 print( s.call( ask, "/one" ) )
@@ -695,8 +698,8 @@ far = errand.serve( [ "python3", srv, "{port}", log ], on = [ "box", errand.Vars
 print( far.wait().call( ask, "/far" ) )
 for one in s, bad, far: one.release( now = True )
 `)
-	cmd := exec.Command("python3", "ask.py", srv, log, filepath.Join(p.cache(), "bin"))
-	cmd.Dir, cmd.Env = p.root, append(append([]string{}, p.env...), "PYTHONPATH="+lib, "ERRAND="+built)
+	cmd := exec.Command("python3", "ask.py", srv, log)
+	cmd.Dir, cmd.Env = p.root, append(append([]string{}, p.env...), "PYTHONPATH="+lib, "ERRAND="+built, "AGENTS="+filepath.Join(p.cache(), "bin"))
 	var errs strings.Builder
 	cmd.Stderr = &errs
 	out, err := cmd.Output()
@@ -930,7 +933,8 @@ func TestAServerAskedFromNode(t *testing.T) {
 	lib, _ := filepath.Abs("../../lib/node/index.js")
 	p.write("ask.mjs", `import { execFileSync } from "node:child_process";
 import { serve, http, ServeError } from "`+lib+`";
-const [ srv, log, agents ] = process.argv.slice( 2 );
+const [ srv, log ] = process.argv.slice( 2 );
+const agents = process.env.AGENTS; // ( not an argument: Linux's pkill -f would find this program too )
 const ask = async url => ( await fetch( url ) ).text();
 const s = serve( [ "python3", srv, "{port}", log ], { vars: { X: 1 }, cpus: 1, idle: "1h", busy: http( "/api", { field: "models" } ), label: "node" } );
 console.log( await s.call( ask, "/one" ) );
@@ -944,8 +948,8 @@ try { await serve( [ "nosuchprogram" ] ).url(); } catch ( err ) { console.log( e
 try { serve( [ "x" ], { gpu: 1 } ); } catch ( err ) { console.log( err.message ); }
 for ( const one of [ s, bad ] ) await one.release( { now: true } );
 `)
-	cmd := exec.Command(node, "ask.mjs", srv, log, filepath.Join(p.cache(), "bin"))
-	cmd.Dir, cmd.Env = p.root, append(append([]string{}, p.env...), "ERRAND="+built)
+	cmd := exec.Command(node, "ask.mjs", srv, log)
+	cmd.Dir, cmd.Env = p.root, append(append([]string{}, p.env...), "ERRAND="+built, "AGENTS="+filepath.Join(p.cache(), "bin"))
 	var errs strings.Builder
 	cmd.Stderr = &errs
 	out, err := cmd.Output()

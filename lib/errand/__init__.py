@@ -26,7 +26,7 @@ from .entries import (          # noqa: F401  -- the public surface of a file of
 )
 from .local import Skipped, have, need, skip, value   # noqa: F401
 from .rows import row                                 # noqa: F401
-from .steps import Static, result, step, view         # noqa: F401
+from .steps import Lin, Log, Static, result, step, view  # noqa: F401
 
 try:
     from ._version import __version__                 # written when it is built: the tag of a release, or what git says
@@ -47,7 +47,7 @@ _LAZY = {
                        "Ssh", "Slurm", "Mpi", "Preload", "Missing", "Windows", "WindowsBox" ), "layers" ),
 }
 
-__all__ = [ "Args", "Param", "Skipped", "Static", "bench", "build_dir", "cache_dir", "default_env", "default_run", "download", "entry",
+__all__ = [ "Args", "Lin", "Log", "Param", "Skipped", "Static", "bench", "build_dir", "cache_dir", "default_env", "default_run", "download", "entry",
             "experiment", "has_tag", "have", "library_cache", "memo", "need", "out_dir", "require", "result", "row", "skip", "step", "tag",
             "test", "track", "value", "view", *_LAZY ]
 

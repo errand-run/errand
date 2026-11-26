@@ -226,7 +226,18 @@ step( text: str = None, *, done: float = None, **values: float )
 
 Where the run is now: `text` as a person reads it, `done` a fraction from 0 to 1, and named numbers,
 one curve each. Written to the run's journal, `$ERRAND_STEPS`, ten times per second at most; outside
-errand it does nothing. → [Where a run is: steps](/guide/steps)
+errand it does nothing. A value that is not finite is left out. → [Where a run is: steps](/guide/steps)
+
+### Log, Lin
+
+```python
+Log( value: float )
+Lin( value: float )
+```
+
+A value of [`step`](#step) whose curve is drawn on a log, or a linear, scale: `errand.step( residual =
+errand.Log( r ) )`. Each is a `float`. Not said, errand takes log for values all positive spanning more
+than two decades. → [The scale of a curve](/guide/steps#the-scale-of-a-curve)
 
 ### build_dir
 

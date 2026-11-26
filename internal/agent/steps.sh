@@ -5,9 +5,18 @@ step() {
         errand_line="$errand_line, \"text\": \"$( printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g' )\""
         shift
     fi
+    errand_scales=""
     for errand_kv in "$@"; do
-        errand_line="$errand_line, \"${errand_kv%%=*}\": ${errand_kv#*=}"
+        errand_k=${errand_kv%%=*}
+        errand_v=${errand_kv#*=}
+        case $errand_v in                      # NAME=NUMBER:log: the scale its curve is drawn on
+            *:log|*:lin)
+                errand_scales="$errand_scales${errand_scales:+, }\"$errand_k\": \"${errand_v##*:}\""
+                errand_v=${errand_v%:*} ;;
+        esac
+        errand_line="$errand_line, \"$errand_k\": $errand_v"
     done
+    [ -z "$errand_scales" ] || errand_line="$errand_line, \"scales\": {$errand_scales}"
     printf '%s}\n' "$errand_line" >> "$ERRAND_STEPS" 2>/dev/null
     return 0
 }

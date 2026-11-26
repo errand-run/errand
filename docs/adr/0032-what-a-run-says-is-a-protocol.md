@@ -189,3 +189,16 @@ it meant.
 Not done: `p.results` still goes through the Python that ran the entry, not through the file ( both end in
 `result.yaml` ); the run's parameters handed to any program; Julia, R, Rust, Fortran; Windows ( the launcher is
 written as a `.cmd`, never run ).
+
+## Amended, 2026-11-26: the scale of a curve
+
+The page draws the curves, and which of them read on a log scale cannot all be guessed. A step's line may
+carry `scales`, an object of `"log"` or `"lin"` by curve: `{"t": …, "residual": 3e-7, "scales": {"residual":
+"log"}}`. It joins the keys that are no curve. It is an addition, ignored by who does not know it:
+`ERRAND_PROTOCOL` stays `1`. Said with the value in every binding: `errand.Log( x )`, `errand.Lin( x )`;
+`residual=3e-7:log` to `errand say` and the shell's `step`; `errand::Log( x )` in C++. Not said, the reader
+takes log for values all positive spanning more than two decades ( `internal/page/curves.go` ), and
+whoever looks may choose otherwise.
+
+A curve's value that is not finite is now left out of its line by Python and `errand say`: JSON has no
+`inf` nor `nan`, and a line that held one was not read at all, text and other curves with it.

@@ -1,7 +1,7 @@
 // What a run says, for whoever would rather not write the lines itself ( ADR 0032 ): from a shell script, Fortran, a
 // Makefile.
 //
-//	"$ERRAND" say step "iteration 41" --done 0.41 residual=3e-7
+//	"$ERRAND" say step "iteration 41" --done 0.41 residual=3e-7:log
 //	"$ERRAND" say view convergence.html --title "Convergence"
 //	"$ERRAND" say result seconds=1.52 primes=9592
 //
@@ -11,6 +11,7 @@ package agent
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -34,7 +35,7 @@ func SayMain(args []string) int {
 		return 2
 	}
 	if len(args) == 0 {
-		return bad("step TEXT [--done F] [NAME=NUMBER…] | view PATH [--title T] [--last FILE…] | result NAME=VALUE…")
+		return bad("step TEXT [--done F] [NAME=NUMBER[:log|:lin]…] | view PATH [--title T] [--last FILE…] | result NAME=VALUE…")
 	}
 	what, rest := args[0], args[1:]
 	now := float64(time.Now().UnixNano()) / 1e9
@@ -73,13 +74,23 @@ func SayMain(args []string) int {
 			}
 			line["done"] = f
 		}
+		scales := map[string]string{}
 		for _, pair := range rest {
 			name, value, ok := strings.Cut(pair, "=")
+			value, scale, scaled := strings.Cut(value, ":")
 			f, err := strconv.ParseFloat(value, 64)
-			if !ok || !isName(name) || err != nil {
-				return bad("%s: a curve is NAME=NUMBER", pair)
+			if !ok || !isName(name) || err != nil || (scaled && scale != "log" && scale != "lin") {
+				return bad("%s: a curve is NAME=NUMBER, NAME=NUMBER:log or NAME=NUMBER:lin", pair)
 			}
-			line[name] = f
+			if !math.IsInf(f, 0) && !math.IsNaN(f) { // ( JSON has neither: the whole line would be lost )
+				line[name] = f
+			}
+			if scaled {
+				scales[name] = scale
+			}
+		}
+		if len(scales) > 0 {
+			line["scales"] = scales
 		}
 		if journal := os.Getenv("ERRAND_STEPS"); journal != "" {
 			_ = kit.AppendLine(journal, line)

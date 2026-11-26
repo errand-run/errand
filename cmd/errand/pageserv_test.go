@@ -22,7 +22,7 @@ func TestAPageAsksForItsServices(t *testing.T) {
 	p.env = append(p.env, python(t)...)
 	config := filepath.Join(filepath.Dir(p.root), "config")
 	p.env = append(p.env, "XDG_CONFIG_HOME="+config, "ERRAND_NO_BROWSER=1")
-	srv := p.write("srv.py", `import http.server, sys
+	srv := p.write("srv.py", `import http.server, socketserver, sys
 class H( http.server.BaseHTTPRequestHandler ):
     def do_GET( self ):
         n = int( self.headers.get( "Content-Length" ) or 0 )
@@ -30,7 +30,9 @@ class H( http.server.BaseHTTPRequestHandler ):
         self.send_response( 200 ); self.send_header( "Content-Length", str( len( body ) ) ); self.end_headers(); self.wfile.write( body )
     do_POST = do_GET
     def log_message( self, *a ): pass
-http.server.ThreadingHTTPServer( ( "127.0.0.1", int( sys.argv[ 1 ] ) ), H ).serve_forever()
+class S( http.server.ThreadingHTTPServer ):
+    server_bind = socketserver.TCPServer.server_bind # ( HTTPServer's looks its address up before it listens: 30 s on some Macs )
+S( ( "127.0.0.1", int( sys.argv[ 1 ] ) ), H ).serve_forever()
 `)
 	described := func(name string) string {
 		b, _ := json.Marshal(map[string]any{"name": name, "protocol": 1, "text": "a field", "run": []string{"python3", srv, "{port}"}, "idle": "1h"})

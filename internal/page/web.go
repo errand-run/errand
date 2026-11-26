@@ -510,6 +510,14 @@ func (w *webServer) serve(rw http.ResponseWriter, r *http.Request) {
 			return
 		}
 		sendJSON(rw, 200, d)
+	case r.URL.Path == "/curves": // the points of some curves of a run's steps
+		row, err := u.find(q.Get("key"))
+		if err != nil {
+			sendError(rw, err)
+			return
+		}
+		_, _, got := u.DetailOf(row)
+		sendJSON(rw, 200, map[string]any{"curves": curvePoints(got.step, q["name"])})
 	case r.URL.Path == "/peek":
 		got, err := w.peek(u, q.Get("key"), q.Get("path"), q.Get("size"))
 		if err != nil {
@@ -636,6 +644,7 @@ func (w *webServer) detail(u *Ui, key string) (map[string]any, error) {
 	if got.step != nil {
 		out["saidAt"] = got.step.T
 	}
+	out["curves"] = curvesOf(got.step)
 	if got.Path != "" {
 		out["console"] = got.Path
 	}

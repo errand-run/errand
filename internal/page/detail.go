@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/errand-run/errand/internal/system"
+	"math"
 	"os"
 	"path"
 	"path/filepath"
@@ -36,6 +37,7 @@ type UiDetail struct {
 	Dir     bool    `json:"dir,omitempty"`
 	T       float64 `json:"t,omitempty"`
 	Status  string  `json:"status,omitempty"`
+	Curve   bool    `json:"curve,omitempty"` // a fact that is a curve of its steps
 }
 
 type UiRead struct {
@@ -68,11 +70,30 @@ type stepFull struct {
 	Done   *float64
 	Eta    *float64
 	T      float64
+	Start  float64 // when it spoke first
 	Curves map[string][]float64
+	Times  map[string][]float64 // when each point of a curve was said
+	Scales map[string]string    // the scale the run said of a curve: "log", "lin"
 	Order  []string
 }
 
-func spark(values []float64, width int) string {
+// copied: the same, apart from what is read next
+func (s stepFull) copied() stepFull {
+	curves, times, scales := map[string][]float64{}, map[string][]float64{}, map[string]string{}
+	for k, v := range s.Curves {
+		curves[k] = append([]float64{}, v...)
+	}
+	for k, v := range s.Times {
+		times[k] = append([]float64{}, v...)
+	}
+	for k, v := range s.Scales {
+		scales[k] = v
+	}
+	s.Curves, s.Times, s.Scales, s.Order = curves, times, scales, append([]string{}, s.Order...)
+	return s
+}
+
+func spark(values []float64, width int, log bool) string {
 	if len(values) > width { // the most recent, as many as there is room for
 		step := float64(len(values)) / float64(width)
 		var out []float64
@@ -80,6 +101,22 @@ func spark(values []float64, width int) string {
 			out = append(out, values[int(float64(i+1)*step)-1])
 		}
 		values = out
+	}
+	if log { // what is not positive has no place on it: drawn at the bottom
+		least := math.Inf(1)
+		for _, v := range values {
+			if v > 0 {
+				least = min(least, v)
+			}
+		}
+		if math.IsInf(least, 1) {
+			least = 1
+		}
+		logs := make([]float64, len(values))
+		for i, v := range values {
+			logs[i] = math.Log10(max(v, least))
+		}
+		values = logs
 	}
 	lo, hi := values[0], values[0]
 	for _, v := range values {
@@ -111,7 +148,10 @@ type journal struct {
 func (j *journal) read(text string) {
 	s := &j.step
 	if j.at == nil {
-		j.at, s.Curves = map[string]int{}, map[string][]float64{}
+		j.at = map[string]int{}
+	}
+	if s.Curves == nil {
+		s.Curves, s.Times, s.Scales = map[string][]float64{}, map[string][]float64{}, map[string]string{}
 	}
 	text = j.part + text
 	whole := strings.LastIndexByte(text, '\n') + 1
@@ -148,6 +188,14 @@ func (j *journal) read(text string) {
 				view.Last = last
 			}
 		}
+		if said, ok := e["scales"].(map[string]any); ok {
+			for k, v := range said {
+				if v == "log" || v == "lin" {
+					s.Scales[k] = v.(string)
+				}
+			}
+			delete(e, "scales")
+		}
 		for k, v := range e {
 			switch k {
 			case "t", "view", "title", "last", "open", "dir":
@@ -169,9 +217,13 @@ func (j *journal) read(text string) {
 						s.Order = append(s.Order, k)
 					}
 					s.Curves[k] = append(s.Curves[k], x)
+					s.Times[k] = append(s.Times[k], t)
 					j.spoke = true
 				}
 			}
+		}
+		if s.Start == 0 {
+			s.Start = t
 		}
 		s.T = t
 	}
@@ -184,12 +236,7 @@ func (j *journal) state() (*stepFull, []uiView) {
 	if !j.spoke {
 		return nil, views
 	}
-	s := j.step
-	s.Order = append([]string{}, s.Order...)
-	s.Curves = map[string][]float64{}
-	for k, v := range j.step.Curves {
-		s.Curves[k] = v
-	}
+	s := j.step.copied()
 	return &s, views
 }
 
@@ -259,11 +306,7 @@ func (u *Ui) read(m *UiMachine, leaf string, was UiRead) UiRead {
 			next.at[k] = v
 		}
 		next.views = append([]uiView{}, got.said.views...)
-		next.step.Order = append([]string{}, got.said.step.Order...)
-		next.step.Curves = map[string][]float64{}
-		for k, v := range got.said.step.Curves {
-			next.step.Curves[k] = append([]float64{}, v...)
-		}
+		next.step = got.said.step.copied()
 		got.said = &next
 		got.said.read(string(b))
 		end := kit.Num(t["end"], 0)
@@ -328,8 +371,8 @@ func RowLeaf(row *UiRow) string {
 }
 
 // facts: what the detail says of a row first
-func (u *Ui) facts(row *UiRow, m *UiMachine, step *stepFull) [][2]string {
-	var out [][2]string
+func (u *Ui) facts(row *UiRow, m *UiMachine, step *stepFull) (out [][2]string, curves map[int]bool) {
+	curves = map[int]bool{} // which of the lines are curves, by where they are
 	line := func(k, v string) {
 		if v != "" {
 			out = append(out, [2]string{k, v})
@@ -366,7 +409,8 @@ func (u *Ui) facts(row *UiRow, m *UiMachine, step *stepFull) [][2]string {
 		}
 		for _, k := range step.Order {
 			v := step.Curves[k]
-			line(k, fmt.Sprintf("%s  %.4g", spark(v, 30), v[len(v)-1]))
+			curves[len(out)] = true
+			line(k, fmt.Sprintf("%s  %.4g", spark(v, 30, step.scale(k) == "log"), v[len(v)-1]))
 		}
 	}
 	switch w := row.What.(type) {
@@ -556,13 +600,13 @@ func (u *Ui) facts(row *UiRow, m *UiMachine, step *stepFull) [][2]string {
 		}
 	default:
 		if m == nil {
-			return out
+			return out, curves
 		}
 		if m.M.Dormant() {
 			line("machine", m.Name())
 			line("dormant", "no work sent there for "+reach.Span(kit.Seconds(time.Now())-m.M.Used())+": not contacted, so that no agent starts there for nothing")
 			line("a", "contacts it, now and from now on ( saved: errand status too )")
-			return out
+			return out, curves
 		}
 		here := ""
 		if m.Here() {
@@ -613,7 +657,7 @@ func (u *Ui) facts(row *UiRow, m *UiMachine, step *stepFull) [][2]string {
 			}
 		}
 	}
-	return out
+	return out, curves
 }
 
 var ReadsMu sync.Mutex
@@ -660,8 +704,9 @@ func (u *Ui) DetailOf(row *UiRow) ([]UiDetail, *UiMachine, UiRead) {
 		}
 	}
 	out := []UiDetail{}
-	for _, f := range u.facts(row, m, got.step) {
-		out = append(out, UiDetail{Kind: "plain", Label: fmt.Sprintf("%-9s %s", f[0], f[1]), K: f[0], V: f[1]})
+	facts, curves := u.facts(row, m, got.step)
+	for i, f := range facts {
+		out = append(out, UiDetail{Kind: "plain", Label: fmt.Sprintf("%-9s %s", f[0], f[1]), K: f[0], V: f[1], Curve: curves[i]})
 	}
 	if leaf == "" || m == nil {
 		return out, m, got

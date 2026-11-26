@@ -125,3 +125,18 @@ if test( "a cache zone outside any project, a library's cache by hand, in a run,
             assert r.returncode != 0 and "no cache directory for mylib" in r.stderr, r
         for bad in ( "", "..", "a/b" ):
             assert "the name of a library" in alone( f"import errand\nerrand.library_cache( {bad!r} )", tmp ).stderr
+
+
+if test( "a step's line: the scales said, merged between two writes; what JSON cannot say left out" ):
+    import json
+    with tempfile.TemporaryDirectory() as tmp:
+        journal = Path( tmp ) / "steps.jsonl"
+        r = alone( "import errand\nerrand.step( 'a', residual = errand.Log( 1 ) )\nerrand.step( loss = float( 'nan' ), cfl = errand.Lin( 2 ), done = float( 'inf' ) )\n"
+                   "errand.step( residual = errand.Log( .5 ) )", tmp, ERRAND_STEPS = str( journal ) )
+        assert r.returncode == 0, r
+        said = { }
+        for line in journal.read_text().splitlines():
+            one = json.loads( line, parse_constant = lambda word: 1 / 0 )         # NaN, Infinity: no JSON
+            said.update( one, scales = { **said.get( "scales", { } ), **one.get( "scales", { } ) } )
+        del said[ "t" ]
+        assert said == { "text": "a", "residual": .5, "cfl": 2.0, "scales": { "residual": "log", "cfl": "lin" } }, said

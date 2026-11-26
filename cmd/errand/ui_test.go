@@ -91,6 +91,7 @@ mkdir -p "$ERRAND_OUT_DIR/scene.sviz"; echo "<p>scene</p>" > "$ERRAND_OUT_DIR/sc
 echo "<p>hello</p>" > "$ERRAND_OUT_DIR/page.html"
 echo '{"t": 1, "text": "half way", "done": 0.5, "residual": 0.25}' >> "$ERRAND_STEPS"
 echo '{"t": 2, "view": "page.html", "title": "The page"}' >> "$ERRAND_STEPS"
+echo '{"t": 3, "residual": 0.001}' >> "$ERRAND_STEPS"
 echo '{"t": 3, "view": "scene.sviz", "open": [{"static": "index.html"}]}' >> "$ERRAND_STEPS"
 echo out-said; [ "$1" = wait ] && while [ ! -f gate ]; do sleep 0.1; done; exit 0
 `)
@@ -170,6 +171,13 @@ echo out-said; [ "$1" = wait ] && while [ ! -f gate ]; do sleep 0.1; done; exit 
 		if !strings.Contains(said, want) {
 			t.Errorf("its detail does not say %q: %s", want, said)
 		}
+	}
+	// its curves: what the detail says of them, then the points of those asked for
+	if got := fmt.Sprint(d["curves"]); got != "[map[last:0.001 n:2 name:residual scale:log varies:true]]" {
+		t.Errorf("its curves: %s", got)
+	}
+	if got := fmt.Sprint(b.json("/curves?key=" + key + "&name=residual")["curves"]); got != "map[residual:map[i:[0 1] n:2 t:[0 2] v:[0.25 0.001]]]" {
+		t.Errorf("their points: %s", got)
 	}
 	var scene, page map[string]any
 	for _, x := range caches.ListOf(d["rows"]) {
