@@ -10,7 +10,9 @@ import (
 // Watch: `on` is called when something is added to a directory or taken from it, and when its file `name` ( there already,
 // or to come ) is written -- told by the system, where it tells; looked at twice a second where it does not. What is
 // written by another machine of a shared disk is told to nobody. -> what stops it; `on` is not called after.
-func Watch(dir, name string, on func()) (stop func()) {
+func Watch(dir, name string, on func()) (stop func()) { return watchBy(watchDir, dir, name, on) }
+
+func watchBy(told func(dir, name string, on func()) (func(), error), dir, name string, on func()) (stop func()) {
 	var mu sync.Mutex
 	over := false
 	said := func() {
@@ -20,7 +22,7 @@ func Watch(dir, name string, on func()) (stop func()) {
 			on()
 		}
 	}
-	end, err := watchDir(dir, name, said)
+	end, err := told(dir, name, said)
 	if err != nil {
 		end = lookAt(dir, name, said)
 	}
@@ -46,8 +48,8 @@ func lookAt(dir, name string, on func()) func() {
 		}
 		return out
 	}
+	last := state() // ( before returning: what changes from now on is told )
 	go func() {
-		last := state()
 		tick := time.NewTicker(500 * time.Millisecond)
 		defer tick.Stop()
 		for {

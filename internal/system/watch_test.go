@@ -1,6 +1,7 @@
 package system
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -8,9 +9,18 @@ import (
 )
 
 func TestWatch(t *testing.T) {
+	t.Run("told", func(t *testing.T) { watchSays(t, Watch) })
+	t.Run("looked at", func(t *testing.T) { // ( as on Windows )
+		watchSays(t, func(dir, name string, on func()) func() {
+			return watchBy(func(string, string, func()) (func(), error) { return nil, errors.New("not told") }, dir, name, on)
+		})
+	})
+}
+
+func watchSays(t *testing.T, watch func(dir, name string, on func()) func()) {
 	dir := t.TempDir()
 	told := make(chan struct{}, 100)
-	stop := Watch(dir, "steps.jsonl", func() { told <- struct{}{} })
+	stop := watch(dir, "steps.jsonl", func() { told <- struct{}{} })
 	defer stop()
 	wait := func(what string, want bool) {
 		t.Helper()
