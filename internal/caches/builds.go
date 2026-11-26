@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/errand-run/errand/internal/kit"
+	"github.com/errand-run/errand/internal/system"
 )
 
 // The build directories of a project ( ADR 0039 ): `<caches>/build/<env>/<name>`, a cache whose writer is errand. Each is an
@@ -42,7 +43,7 @@ func BuildUsed(cache, env, name string) {
 	if !kit.IsDir(filepath.Join(cache, env)) || markBuilds(cache) != nil {
 		return
 	}
-	host, _ := os.Hostname()
+	host := system.Hostname()
 	journal := filepath.Join(cache, cacheJournals, fmt.Sprintf("%s-%d-errand.jsonl", strings.SplitN(host, ".", 2)[0], os.Getpid()))
 	now, key := NowIso(Clock()), env+"/"+name
 	_ = kit.AppendLine(journal, map[string]any{"op": "use", "entries": []string{key}, "at": now})

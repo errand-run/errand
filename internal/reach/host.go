@@ -70,6 +70,28 @@ func (h HostSpec) command(argv []string) *exec.Cmd {
 	return cmd
 }
 
+// Layer: the same, as a layer that reaches it
+func (h HostSpec) Layer() project.Layer {
+	l := project.Layer{"type": "Ssh", "host": h.Host}
+	if len(h.Options) > 0 {
+		options := []any{}
+		for _, o := range h.Options {
+			options = append(options, o)
+		}
+		l["options"] = options
+	}
+	if h.Cache != "" {
+		l["cache"] = h.Cache
+	}
+	if h.Shared != nil {
+		l["shared"] = *h.Shared
+	}
+	if h.Windows {
+		l["windows"] = map[string]any{}
+	}
+	return l
+}
+
 func HostOf(l project.Layer) HostSpec {
 	h := HostSpec{Host: l.String("host"), Options: l.Strings("options"), Cache: strings.TrimSpace(l.String("cache"))}
 	if shared, ok := l["shared"].(bool); ok {

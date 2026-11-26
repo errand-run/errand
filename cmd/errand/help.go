@@ -67,18 +67,34 @@ var verbs = []struct{ name, what, usage, options string }{
 	{"machines", "the machines errand asks what runs there", "errand machines [forget NAME… | rename NAME LABEL | watch NAME on|off|auto | gauges NAME on|off]", ""},
 	{"agents", "what is kept between commands", "errand agents [stop [NAME]] [restart] [--force]", ""},
 	{"vm", "the virtual machines kept warm between commands", "errand vm stop", ""},
-	{"serve", "a server kept while used, under the queue", "errand serve [NAME | -- CMD] | list | stop NAME | connect NAME [PORT] | forward NAME --host H | look | fetch | install | probe", `
+	{"serve", "a server kept while used, under the queue", "errand serve [NAME | -- CMD] | list | stop NAME | release NAME [--now] | connect HASH [PORT] | authorize --to pages|key:NAME [NAME#VERSION] [-- CMD] | authorized | withdraw HASH | dev REPOSITORY PATH | source URL | look | fetch | probe", `
   --gpus N --gpu-ram S --ram S --cpus N -x -n LABEL   what it needs
   --name NAME                  what it is called ( default: the label, else the command's first word )
-  --port [NAME=]ANNOUNCED[:SERVER]   a port, repeated for several; empty: errand chooses, the announced side is kept
+  --port [NAME=]ANNOUNCED[:SERVER]   a port, repeated for several; empty: errand chooses, the announced side is kept for it
+  --keep T                     how long its port stays once it was last used ( 1d )
+  --var NAME=VALUE             a variable of the server's; repeated
+  --cwd DIR                    where it starts ( default: the home )
+  --version-of FILE            a file whose contents make another server; repeated
+  --server-version V           raised when something errand does not see has changed
   --idle T                     how long without connection nor busy before it stops ( 10m )
+  --on HOST                    where it runs: another machine; its port is on this one
+  --env E                      where it runs: an environment of the project, its layers in full
+  --busy-http PATH[:FIELD]     the server is busy when that field of what it answers is not empty
   --busy-if LINE               a shell command, exit 0 when the server is busy; {port} is its port
+  --ready-http, --ready-if     likewise, that it answers ( default: its ports accept )
   --others                     let other accounts of this machine connect
+  --listen ADDR                let other machines connect: the port listened on at that address too ( 0.0.0.0 )
+  --always                     the system listens on the port in errand's stead, and starts errand at a connection
+  --hold-end T                 of the port, or of connect: a client's end held until the server was silent that long
   --grace T                    between asking it to stop and killing it ( 10s )
-  --ensure                     nothing said when it already runs
+  --wait                       started, and answered once it answers
+  --ensure                     the same, nothing said
+  --json                       for a program: url, ports, until, again_in, state, why
+  --spec -                     the whole request, as JSON, on the standard input
   --url [PORT]                 only its URL
   -f                           stay until it stops; Ctrl-C stops it
-  --host H, --env E, --on M    another machine's service`},
+  --to pages|key:NAME          authorize: who may ask for it, by its hash ( a key ) or its NAME#VERSION ( a page )
+  --host H                     list, stop, release, connect, authorize, authorized, withdraw: on another machine`},
 	{"hold", "a claim held while stdin is open", "errand hold [--gpus N] [--gpu-ram S] [--ram S] [--cpus N] [-x] [-n LABEL]", ""},
 	{"download", "a file into the project's cache, as errand.download does", "errand download URL [--sha256 H]", ""},
 	{"caches", "the caches of the libraries the runs use, and what they no longer need, removed", "errand caches [MACHINE...] [--dry-run] [--unused DAYS]", ""},
@@ -133,7 +149,7 @@ func helpText(verb string) string {
 // typedVerb: whether a word is one a person would type as a verb -- not one of those errand starts itself with
 func typedVerb(word string) bool {
 	switch word {
-	case "place", "place-again", "there", "peek", "quit", "keeper", "agent", "table", "manifest", "sync", "storage", "forked", "kept-forward", "ctrl-c":
+	case "place", "place-again", "there", "peek", "quit", "keeper", "agent", "table", "manifest", "sync", "storage", "forked", "ctrl-c":
 		return false
 	}
 	return !strings.ContainsAny(word, "/\\")

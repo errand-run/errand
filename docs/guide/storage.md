@@ -87,8 +87,8 @@ Each layer that builds something says where it goes:
   seen/              one link per run made on this machine, to the run's directory
   dir.id             who this directory is ( `{ id, made, host }` ): the same id read from two machines, one directory
   copies/            the copies of projects this machine holds ( each has its own id, `.errand-copy.id` )
-  serve/  svc-envs/  repos/   the services: their keepers, their envs ( one per version ), the code fetched for them
-  kept.json          the ports the system keeps for errand ( `errand web keep`, `forward --keep` )
+  serving/ leases/ svc-envs/  repos/   the services: their keepers, their envs ( one per version ), the code fetched for them
+  kept.json          the ports the system keeps for errand ( `errand web keep` )
 ```
 
 The sources are small. The Python errand may make for itself is tens of MB, once. The rest is live

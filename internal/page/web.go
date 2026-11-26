@@ -992,6 +992,36 @@ func (w *webServer) act(u *Ui, body map[string]any) (map[string]any, error) {
 			return confirm(title, lines, "remove", true)
 		}
 		return said(do())
+	case "withdraw": // an authorization taken back, from all it was given to
+		a, ok := row.What.(*reach.AuthRow)
+		if !ok || m == nil {
+			return nil, errors.New("on an authorization")
+		}
+		if !sure {
+			return confirm("withdraw "+a.Label+"~"+a.Hash+" on "+m.Name()+"?", []string{"authorized to " + strings.Join(a.To, ", ") + ": not any more",
+				svc.Typed(a.Command), "a connection already open is not cut"}, "withdraw", true)
+		}
+		if _, err := u.Ask(m, map[string]any{"op": "services_do", "req": map[string]any{"do": "withdraw", "hash": a.Hash}}); err != nil {
+			return nil, err
+		}
+		u.refresh()
+		u.Changed(true, nil)
+		return said(a.Label + " is authorized to no one on " + m.Name())
+	case "authorize": // what a page asked for, given to pages: the command shown in full first
+		r, ok := row.What.(*reach.RefusedRow)
+		if !ok || m == nil || r.Who != "pages" || len(r.Command) == 0 {
+			return nil, errors.New("on a page's request that was refused, whose command is known")
+		}
+		if !sure {
+			return confirm("authorize "+r.What+" to pages on "+m.Name()+"?", []string{"pages that ask for " + r.What + " will start, on " + m.Name() + ":",
+				svc.Typed(r.Command), "as: errand serve authorize --to pages --on " + m.Name() + " " + r.What + " -- " + svc.Typed(r.Command)}, "authorize", false)
+		}
+		if _, err := u.Ask(m, map[string]any{"op": "services_do", "req": map[string]any{"do": "authorize", "page": r.What, "words": r.Command}}); err != nil {
+			return nil, err
+		}
+		u.refresh()
+		u.Changed(true, nil)
+		return said(r.What + " is authorized to pages on " + m.Name())
 	case "kill":
 		list := u.KillList(row)
 		if len(list) == 0 {

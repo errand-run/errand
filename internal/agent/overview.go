@@ -21,6 +21,7 @@ import (
 	"github.com/errand-run/errand/internal/kit"
 	"github.com/errand-run/errand/internal/queue"
 	"github.com/errand-run/errand/internal/reach"
+	"github.com/errand-run/errand/internal/svc"
 	"github.com/errand-run/errand/internal/system"
 )
 
@@ -115,13 +116,13 @@ func rssOf(pid int) float64 {
 
 // own: what this agent alone says of itself
 func (a *Place) own() reach.OverviewDoc {
-	return reach.OverviewDoc{V: 1, Host: queue.Host(), Now: kit.Seconds(time.Now()), Rows: a.table(), Agents: []reach.AgentRow{a.agentRow()}, Serving: a.serving(), VMs: a.vms()}
+	return reach.OverviewDoc{V: 1, Host: queue.Host(), Now: kit.Seconds(time.Now()), Rows: a.table(), Agents: []reach.AgentRow{a.agentRow()}, Serving: a.serving(), Leases: a.leaseRows(), VMs: a.vms()}
 }
 
 // overview: what there is on this machine -- what the agents that live here say, and what they cannot
 func overview(self *Place) reach.OverviewDoc {
 	host := queue.Host()
-	name, _ := os.Hostname()
+	name := system.Hostname()
 	if name == "" {
 		name = host
 	}
@@ -131,6 +132,7 @@ func overview(self *Place) reach.OverviewDoc {
 		out.Rows = append(out.Rows, o.Rows...)
 		out.Agents = append(out.Agents, o.Agents...)
 		out.Serving = append(out.Serving, o.Serving...)
+		out.Leases = append(out.Leases, o.Leases...)
 		out.VMs = append(out.VMs, o.VMs...)
 	}
 	mine := ""
@@ -164,7 +166,32 @@ func overview(self *Place) reach.OverviewDoc {
 	out.Kept = append(out.Kept, unowned()...)
 	out.Rows = onceEach(out.Rows)
 	out.Rested = rested(out.Serving)
+	out.Authorized, out.Refused = authorizedRows()
 	return out
+}
+
+// authorizedRows: what pages and keys may ask for here, and what they were refused lately
+func authorizedRows() ([]reach.AuthRow, []reach.RefusedRow) {
+	all, err := svc.Authorized()
+	var auth []reach.AuthRow
+	if err != nil {
+		auth = append(auth, reach.AuthRow{Hash: "?", Label: svc.AuthorizedFile(), Error: err.Error()})
+	}
+	for h, a := range all {
+		row := reach.AuthRow{Hash: h, Label: a.Label, To: a.To, Page: a.Page, Since: a.Since, Used: a.Used, Command: a.Command(), Unverified: a.Unverified, Dev: a.Dev}
+		if s, err := a.Spec(); err != nil {
+			row.Error = err.Error()
+		} else {
+			row.Vars, row.Needs, row.Cwd, row.Idle, row.Keep = s.ShownVars(), s.NeedsText(), s.Cwd, s.Idle, s.Keep
+		}
+		auth = append(auth, row)
+	}
+	sort.Slice(auth, func(i, j int) bool { return auth[i].Label+auth[i].Hash < auth[j].Label+auth[j].Hash })
+	var refused []reach.RefusedRow
+	for _, r := range svc.Refused() {
+		refused = append(refused, reach.RefusedRow{Who: r.Who, What: r.What, Why: r.Why, From: r.From, Command: r.Command, At: r.At, Times: r.Times})
+	}
+	return auth, refused
 }
 
 // onceEach: a run handed to a batch system is known by the agent that handed it and by its node's: one row of it

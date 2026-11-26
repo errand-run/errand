@@ -46,7 +46,7 @@ func idOf(path, name string) map[string]any {
 	if !kit.IsDir(path) {
 		return nil
 	}
-	host, _ := os.Hostname()
+	host := system.Hostname()
 	said := map[string]any{"id": kit.RandomID(), "made": time.Now().Format("2006-01-02T15:04:05"), "host": host}
 	out, err := os.OpenFile(f, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 	if err != nil {
@@ -145,7 +145,7 @@ func mountKey(m mount) string {
 	if m.Network {
 		return m.fstype + ":" + m.source
 	}
-	host, _ := os.Hostname()
+	host := system.Hostname()
 	short := strings.SplitN(host, ".", 2)[0]
 	if strings.HasPrefix(m.source, "/dev/") || driveLetter.MatchString(m.source) {
 		return short + ":" + m.source
@@ -354,7 +354,7 @@ func storageLook(sizes bool, extra []string) map[string]any {
 			}
 		}
 	}
-	host, _ := os.Hostname()
+	host := system.Hostname()
 	return map[string]any{"host": host, "mounts": ms, "dirs": dirs, "home": home}
 }
 
@@ -458,7 +458,7 @@ func servicesMaybe() bool {
 		home, _ := os.UserHomeDir()
 		config = filepath.Join(home, ".config")
 	}
-	for _, name := range []string{"services.py", "services-installed.json"} {
+	for _, name := range []string{"config.json", "services-installed.json"} {
 		if lexistsFollowed(filepath.Join(config, "errand", name)) {
 			return true
 		}
@@ -519,7 +519,7 @@ func CachesReport(req map[string]any, services func() map[string]any) map[string
 		dirs = append(dirs, rec)
 		paths = append(paths, path)
 	}
-	host, _ := os.Hostname()
+	host := system.Hostname()
 	storage := storageLook(true, paths)
 	storage["versions"] = map[string]any{"versions": []any{}, "code": []any{}, "days": 14.0}
 	storage["dev"] = []any{}

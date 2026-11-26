@@ -17,7 +17,6 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/errand-run/errand/internal/caches"
@@ -31,6 +30,8 @@ const pypi = "https://pypi.org/simple"
 // where code may be taken from without a second word, when the user's file says nothing
 var defaultSources = []string{pypi, "conda-forge", "https://download.blender.org/"}
 
+func UsualSources() []string { return append([]string{}, defaultSources...) }
+
 // platformName: this platform, as descriptions name it: macos-arm64, linux-x86_64, windows-x86_64
 func platformName() string {
 	system, arch := runtime.GOOS, runtime.GOARCH
@@ -43,133 +44,49 @@ func platformName() string {
 	return system + "-" + arch
 }
 
-// ── the declarations ─────────────────────────────────────────────────────────
+// ── what pages may ask for ───────────────────────────────────────────────────
 
-// what a declaration written here may say beside its command and ports
-var declaredKeys = []string{"idle", "gpus", "gpu_ram", "ram", "cpus", "exclusive", "grace", "others", "env", "label", "busy", "cwd"}
-
-func InstalledFile(environ []string) string { return servicesFiles(environ)[1] }
-
-// InstalledHere: the declarations written here, by their names
-func InstalledHere(environ []string) map[string]map[string]any {
-	out := map[string]map[string]any{}
-	for k, v := range caches.ReadObject(InstalledFile(environ)) {
-		if d, ok := v.(map[string]any); ok {
-			out[k] = d
-		}
-	}
-	return out
-}
-
-var installing sync.Mutex
-
-// changeInstalled: the declarations written here, changed and written again
-func changeInstalled(change func(map[string]map[string]any)) error {
-	installing.Lock()
-	defer installing.Unlock()
-	f := InstalledFile(nil)
-	if err := os.MkdirAll(filepath.Dir(f), 0o755); err != nil {
-		return err
-	}
-	got := InstalledHere(nil)
-	change(got)
-	return caches.WriteObject(f, got, true)
-}
-
-// specOf: a declaration written here, as a service
-func specOf(name string, d map[string]any) (ServiceSpec, error) {
-	s := ServiceSpec{Name: name, Command: kit.Strs(d["command"]), Env: map[string]string{}, Needs: map[string]any{}, Idle: 600, Grace: 10, Source: "installed", Provider: d["provider"]}
-	if d["adhoc"] == true {
-		s.Source = "adhoc"
-	}
-	env, _ := d["env"].(map[string]any)
-	for k, v := range env {
-		s.Env[k] = fmt.Sprint(v)
-	}
-	for _, k := range []string{"gpus", "gpu_ram", "ram", "cpus"} {
-		if d[k] != nil {
-			s.Needs[k] = fmt.Sprint(d[k])
-		}
-	}
-	for k, into := range map[string]*float64{"idle": &s.Idle, "grace": &s.Grace} {
-		if d[k] != nil {
-			v, err := Duration(fmt.Sprint(d[k]))
-			if err != nil {
-				return s, err
+// PageSpec: what a page's service runs here -- `NAME#VERSION`, its command, and what is said beside it: idle, gpus, gpu_ram,
+// ram, cpus, exclusive, grace, keep, others, vars, busy, cwd
+func PageSpec(key string, command []string, said map[string]any) (ServiceSpec, error) {
+	s := ServiceSpec{Name: key, Label: key, Command: command, Env: map[string]string{}, Needs: map[string]any{}}
+	_, s.Version = splitKey(key) // ( two versions are two servers, whatever runs them )
+	for k, v := range said {
+		var err error
+		switch k {
+		case "gpus", "gpu_ram", "ram", "cpus":
+			s.Needs[k] = fmt.Sprint(v)
+		case "idle", "grace", "keep":
+			d := 0.0
+			if f, ok := v.(float64); ok {
+				d = f
+			} else {
+				d, err = Duration(fmt.Sprint(v))
 			}
-			*into = v
-		}
-	}
-	s.Exclusive, s.Others, s.Label, s.Cwd = d["exclusive"] == true, d["others"] == true, kit.Text(d["label"]), kit.Text(d["cwd"])
-	if b := kit.Text(d["busy"]); b != "" {
-		s.Busy = b
-	}
-	var err error
-	if s.Ports, err = portsOf(d["ports"]); err != nil {
-		return s, err
-	}
-	return s, s.Check()
-}
-
-// portsOf: the ports of a declaration: { NAME: [ ANNOUNCED, SERVER ] | "ANNOUNCED:SERVER" | ANNOUNCED | null }, or one of
-// those for a port named `port`
-func portsOf(v any) ([]ServicePort, error) {
-	one := func(name string, v any) (ServicePort, error) {
-		p := ServicePort{Name: name}
-		switch x := v.(type) {
-		case nil:
-			return p, nil
-		case []any:
-			if len(x) == 2 {
-				p.Announced, p.Server = int(kit.Num(x[0], 0)), int(kit.Num(x[1], 0))
-				return p, nil
+			*map[string]*float64{"idle": &s.Idle, "grace": &s.Grace, "keep": &s.Keep}[k] = d
+		case "exclusive":
+			s.Exclusive = v == true
+		case "others":
+			s.Others = v == true
+		case "vars", "env":
+			for name, value := range ObjectOf(v) {
+				s.Env[name] = fmt.Sprint(value)
 			}
+		case "busy":
+			if v != "" {
+				s.Busy = v
+			}
+		case "cwd":
+			s.Cwd = kit.Text(v)
+		default:
+			err = fmt.Errorf("%s: not something a page's service is given here", k)
 		}
-		return ParsePort(name + "=" + fmt.Sprint(v))
-	}
-	named, ok := v.(map[string]any)
-	if !ok || len(named) == 0 {
-		p, err := one("port", v)
-		return []ServicePort{p}, err
-	}
-	var out []ServicePort
-	for _, name := range sortedKeys(named) {
-		p, err := one(name, named[name])
 		if err != nil {
-			return nil, err
-		}
-		out = append(out, p)
-	}
-	return out, nil
-}
-
-// DeclareHere: `key` declared with `command`
-func DeclareHere(key string, command []string, needs map[string]any, provider string, extra map[string]any) (map[string]any, error) {
-	d := map[string]any{"command": anyStrs(command)}
-	for _, k := range declaredKeys {
-		if needs[k] != nil {
-			d[k] = needs[k]
+			return s, err
 		}
 	}
-	for k, v := range extra {
-		d[k] = v
-	}
-	if provider != "" {
-		d["provider"] = provider
-	}
-	if _, err := specOf(key, d); err != nil {
-		return nil, err
-	}
-	d["installed"] = time.Now().Format("2006-01-02 15:04:05")
-	return d, changeInstalled(func(all map[string]map[string]any) { all[key] = d })
-}
-
-func anyStrs(words []string) []any {
-	out := make([]any, len(words))
-	for i, w := range words {
-		out[i] = w
-	}
-	return out
+	s.Complete()
+	return s, s.Check()
 }
 
 // WrongVersion: why `key` must not start -- the version its provider gives now is another; "" when it may
@@ -221,6 +138,9 @@ func ComposedHere(key string) ([]string, map[string]any, string, error) {
 	return words, DescribedNeeds(entry), fmt.Sprintf("service %s, as %s %s in %s describes it:\n  %s", key, p.Package, p.Version, p.Env, quoteAll(words)), nil
 }
 
+// Typed: words, as they are typed in a shell
+func Typed(words []string) string { return quoteAll(words) }
+
 func quoteAll(words []string) string {
 	out := make([]string, len(words))
 	for i, w := range words {
@@ -234,27 +154,34 @@ func ObjectOf(v any) map[string]any {
 	return m
 }
 
-// InstallService: `key` declared -- with the words a person typed, else composed from the package here that provides it
-func InstallService(key string, words []string, needs map[string]any) (map[string]any, error) {
+// AuthorizePage: `key` authorized to pages -- with the words a person typed, else composed from the package here that
+// provides it -> the authorization, its hash in it
+func AuthorizePage(key string, words []string, needs map[string]any) (Authorization, error) {
+	how := Authorization{Page: key, Unverified: true}
 	if _, v := splitKey(key); v == "" {
-		return nil, fmt.Errorf("%s: name#version ( the version is the store's, e.g. blender#3fa29c1e )", key)
+		return how, fmt.Errorf("%s: name#version ( the version is the store's, e.g. blender#3fa29c1e )", key)
 	}
 	if len(words) == 0 {
 		var more map[string]any
 		var err error
 		if words, more, _, err = ComposedHere(key); err != nil {
-			return nil, err
+			return how, err
 		}
 		for k, v := range needs {
 			more[k] = v
 		}
 		needs = more
 	}
-	from, extra := "", map[string]any{"unverified": true}
 	if provs := providing(key); len(provs) > 0 {
-		from, extra = provs[0].file(), nil
+		how.Provider, how.Unverified = provs[0].file(), false
 	}
-	return DeclareHere(key, words, needs, from, extra)
+	s, err := PageSpec(key, words, needs)
+	if err != nil {
+		return how, err
+	}
+	how.Hash, err = Authorize(s, "pages", how)
+	how.Definition, how.Label, how.To = Definition(s), key, []string{"pages"}
+	return how, err
 }
 
 // ── sources ──────────────────────────────────────────────────────────────────
@@ -266,8 +193,8 @@ func startsWithSource(from, source string) bool {
 // trusted: whether a source is the user's, or is the repository of a package installed here
 func trusted(from string) bool {
 	list := defaultSources
-	if decl, err := DeclaredServices(kit.LocalCache(), nil); err == nil && decl.Sources != nil {
-		list = decl.Sources
+	if c := ReadConfig(); c.Sources != nil {
+		list = c.Sources
 	}
 	for _, s := range list {
 		if startsWithSource(from, s) {

@@ -2,7 +2,7 @@
 //
 // On a machine, the user's file says that a repository is represented by a checkout:
 //
-//	errand.dev_sources[ "github.com/sdot-team/sdot" ] = errand.Checkout( "~/Projects/sdot-ffi", env = "prj-jax" )
+//	{ "dev_sources": { "github.com/sdot-team/sdot": { "path": "~/Projects/sdot-ffi", "env": "prj-jax" } } }    ( ~/.config/errand/config.json )
 //
 // A store that asks for a service of that repository can then have it run from the checkout, whatever its version, as the
 // CHECKOUT describes it, in the env named, under the key `NAME#dev`. A copy of a project carries, beside it, where it comes
@@ -85,9 +85,9 @@ func repoURL(repo string) string {
 }
 
 // devSources: those this machine's file declares, then those its copies of projects carry
-func devSources(declared map[string]devSource) []devCheckout {
+func devSources(declared map[string]DevSource) []devCheckout {
 	var off []string
-	if data, err := os.ReadFile(filepath.Join(filepath.Dir(InstalledFile(nil)), devOff)); err == nil {
+	if data, err := os.ReadFile(filepath.Join(configDir(nil), devOff)); err == nil {
 		_ = kit.JsonUnmarshal(data, &off)
 	}
 	one := func(repo, at, env, origin string) devCheckout {
@@ -132,7 +132,7 @@ func devSources(declared map[string]devSource) []devCheckout {
 func machineName() string { return queue.Host() }
 
 // DevFor: the dev source of the repository a service comes from -- one that can be used, when there is one
-func DevFor(want AskedService, declared map[string]devSource) *devCheckout {
+func DevFor(want AskedService, declared map[string]DevSource) *devCheckout {
 	git := kit.Text(want.Source["git"])
 	if git == "" {
 		return nil
@@ -185,9 +185,9 @@ func (d devCheckout) Command(p provider, name string) ([]string, error) {
 	if err != nil && d.Python == "" && strings.Contains(err.Error(), "no Python") {
 		how := ""
 		if d.Copy {
-			how = fmt.Sprintf(", or envs = { %q: … }", machineName())
+			how = fmt.Sprintf(", or its `envs` in config.json for %q", machineName())
 		}
-		err = fmt.Errorf("no env for it here ( Checkout( …, env = … )%s )", how)
+		err = fmt.Errorf("no env for it here ( errand serve dev … --env NAME%s )", how)
 	}
 	return words, err
 }
@@ -219,14 +219,13 @@ func (l *looker) devLook(name string, want AskedService) (*devLook, error) {
 
 func init() {
 	filesync.SaidOfCopy = func(root string) map[string]any {
-		decl, _ := DeclaredServices(kit.LocalCache(), nil)
-		return originFor(root, decl.Dev)
+		return originFor(root, ReadConfig().Dev)
 	}
 }
 
 // originFor: what a push says of a project to the machine that holds its copy -- this machine, its path, the dev sources
 // declared here that are inside it
-func originFor(root string, declared map[string]devSource) map[string]any {
+func originFor(root string, declared map[string]DevSource) map[string]any {
 	if real, err := filepath.EvalSymlinks(root); err == nil {
 		root = real
 	}

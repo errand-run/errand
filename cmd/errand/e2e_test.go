@@ -20,6 +20,7 @@ import (
 	"github.com/errand-run/errand/internal/draw"
 	"github.com/errand-run/errand/internal/kit"
 	"github.com/errand-run/errand/internal/runinfo"
+	"github.com/errand-run/errand/internal/system"
 )
 
 var built, builtNext, builtOld string // the program; the same with another hash ( an update ); one of a release before
@@ -2380,7 +2381,7 @@ errand.envs[ "box" ] = errand.Env( [ errand.Ssh( host = "box", root = "copy/proj
 			dockerfile("FROM alpine\n")
 			builds := func() int { return nLines(p.builds()) }
 			envs := func(env string) string { return p.errand("", "envs", env).out }
-			here, _ := os.Hostname()
+			here := system.Hostname()
 			here = strings.SplitN(here, ".", 2)[0]
 
 			if out := envs("d"); !strings.Contains(out, "not built") {

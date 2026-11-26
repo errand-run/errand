@@ -1,7 +1,7 @@
 ---
 status: proposed
 date: 2026-11-20
-amended-by: 0027
+amended-by: 0027, 0040
 ---
 
 # A page asks for its services, and errand serves it through the page's own address

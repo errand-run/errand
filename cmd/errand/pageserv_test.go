@@ -29,10 +29,14 @@ class H( http.server.BaseHTTPRequestHandler ):
     def log_message( self, *a ): pass
 http.server.ThreadingHTTPServer( ( "127.0.0.1", int( sys.argv[ 1 ] ) ), H ).serve_forever()
 `)
-	_ = os.MkdirAll(filepath.Join(config, "errand"), 0o755)
-	_ = os.WriteFile(filepath.Join(config, "errand", "services.py"), []byte(`import errand
-errand.services[ "field#3fa29c1e" ] = errand.Service( [ "python3", "`+srv+`", "{port}" ] )
-`), 0o644)
+	if o := p.errand("", "serve", "authorize", "field#3fa29c1e", "--", "python3", srv, "{port}"); o.code != 0 || !strings.Contains(o.out, "field#3fa29c1e authorized to pages on here") {
+		t.Fatalf("authorized to pages: %d %q %q", o.code, o.out, o.err)
+	}
+	if data, err := os.ReadFile(filepath.Join(config, "errand", "authorized-services.json")); err != nil || !strings.Contains(string(data), `"page": "field#3fa29c1e"`) {
+		t.Errorf("written: %q %v", data, err)
+	} else if st, _ := os.Stat(filepath.Join(config, "errand", "authorized-services.json")); st.Mode().Perm() != 0o600 {
+		t.Errorf("for its user alone: %v", st.Mode())
+	}
 	store := filepath.Join(p.root, "foam.sviz")
 	p.write("foam.sviz/index.html", "<p>foam</p>")
 	p.write("foam.sviz/services.json", `{"format": 2, "services": {"field": {"version": "3fa29c1e", "protocol": 1, "optional": true, "package": {"name": "mytool"}, "described": {"text": "a field"}},
@@ -49,7 +53,7 @@ errand.services[ "field#3fa29c1e" ] = errand.Service( [ "python3", "`+srv+`", "{
 		t.Fatalf(".errand/services: %s", body)
 	}
 	if f := services["field"]; f["version"] != "3fa29c1e" || (f["state"] != "ready" && f["state"] != "unverified") || f["text"] != "a field" {
-		t.Errorf("a service this machine declares: %v", services["field"])
+		t.Errorf("a service this machine authorizes: %v", services["field"])
 	}
 	if f := services["render"]; f["state"] == "ready" || f["state"] == nil {
 		t.Errorf("one it does not: %v", f)
@@ -76,6 +80,10 @@ errand.services[ "field#3fa29c1e" ] = errand.Service( [ "python3", "`+srv+`", "{
 			t.Errorf("%s: %d, not %d", path, r.StatusCode, want)
 		}
 	}
+	if o = p.errand("", "serve", "authorized"); !strings.Contains(o.out, "field#3fa29c1e") || !strings.Contains(o.out, "to pages") || !strings.Contains(o.out, "refused lately:") ||
+		!strings.Contains(o.out, "pages asked for render#aaaa1111") {
+		t.Errorf("authorized, and refused: %q %q", o.out, o.err)
+	}
 	// the command line says the same, and what to type
 	if o = p.errand("", "serve", "look", store); o.code != 0 || !strings.Contains(o.out, "field#3fa29c1e") || !strings.Contains(o.out, "render#aaaa1111") {
 		t.Errorf("serve look: %d %q %q", o.code, o.out, o.err)
@@ -83,12 +91,12 @@ errand.services[ "field#3fa29c1e" ] = errand.Service( [ "python3", "`+srv+`", "{
 	if o = p.errand("", "serve", "probe", "--", "sh", "-c", "echo tool 1.2.3"); o.code != 0 || !strings.Contains(o.out, "1.2.3") {
 		t.Errorf("serve probe: %d %q %q", o.code, o.out, o.err)
 	}
-	if o = p.errand("", "serve", "install", "field2#bbbb2222", "--", "python3", srv, "{port}"); o.code != 0 || !strings.Contains(o.out, "declared on here") || !strings.Contains(o.out, "unverified") {
-		t.Errorf("serve install: %d %q %q", o.code, o.out, o.err)
+	if o = p.errand("", "serve", "authorize", "field2#bbbb2222", "--", "python3", srv, "{port}"); o.code != 0 || !strings.Contains(o.out, "authorized to pages on here") || !strings.Contains(o.out, "unverified") {
+		t.Errorf("serve authorize: %d %q %q", o.code, o.out, o.err)
 	}
 	time.Sleep(20 * time.Millisecond)
 	if o = p.errand("", "serve"); !strings.Contains(o.out, "field2#bbbb2222") {
-		t.Errorf("installed, it is declared: %q %q", o.out, o.err)
+		t.Errorf("authorized, it is listed: %q %q", o.out, o.err)
 	}
 	if o = p.errand("", "serve", "list", "--versions"); o.code != 0 || !strings.Contains(o.out, "field2#bbbb2222") {
 		t.Errorf("the versions: %d %q %q", o.code, o.out, o.err)
@@ -102,13 +110,13 @@ errand.services[ "field#3fa29c1e" ] = errand.Service( [ "python3", "`+srv+`", "{
 }
 
 func TestPortsKeptByTheSystem(t *testing.T) {
-	plist := units.LaunchdPlist("dev.errand.x", []string{"/a b/errand", "kept"}, 12345, map[string]string{"PATH": "/bin&"}, "/log")
+	plist := units.LaunchdPlist("dev.errand.x", []string{"/a b/errand", "kept"}, "127.0.0.1", 12345, map[string]string{"PATH": "/bin&"}, "/log")
 	for _, want := range []string{"<string>/a b/errand</string>", "<string>12345</string>", "/bin&amp;", "inetdCompatibility"} {
 		if !strings.Contains(plist, want) {
 			t.Errorf("the plist does not say %q: %s", want, plist)
 		}
 	}
-	sock, svc := units.SystemdUnits("dev.errand.x", []string{"/a b/errand", "kept"}, 12345, nil)
+	sock, svc := units.SystemdUnits("dev.errand.x", []string{"/a b/errand", "kept"}, "127.0.0.1", 12345, nil)
 	if !strings.Contains(sock, "ListenStream=127.0.0.1:12345") || !strings.Contains(svc, "ExecStart='/a b/errand' 'kept'") {
 		t.Errorf("the units: %s %s", sock, svc)
 	}

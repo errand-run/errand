@@ -52,7 +52,8 @@ const (
 // KeptPorts: the page's and the stores', when the system keeps them
 func KeptPorts() [2]int { return [2]int{KeptPort(WebLabel), KeptPort(StoresLabel)} }
 
-func keepRefused() string {
+// Refused: why the system keeps nothing here; "": it can
+func Refused() string {
 	if os.Getenv("ERRAND_SHARED") == "1" || os.Getenv("SLURM_JOB_ID") != "" {
 		return "this machine is shared with others: errand keeps nothing on it"
 	}
@@ -82,7 +83,7 @@ func keepEnviron() map[string]string {
 	return out
 }
 
-func LaunchdPlist(label string, argv []string, port int, env map[string]string, log string) string {
+func LaunchdPlist(label string, argv []string, addr string, port int, env map[string]string, log string) string {
 	esc := func(s string) string {
 		var b strings.Builder
 		_ = xml.EscapeText(&b, []byte(s))
@@ -100,7 +101,7 @@ func LaunchdPlist(label string, argv []string, port int, env map[string]string, 
 		b.WriteString("<string>" + esc(a) + "</string>")
 	}
 	b.WriteString(`</array>
-<key>Sockets</key><dict><key>Listeners</key><dict><key>SockNodeName</key><string>127.0.0.1</string><key>SockServiceName</key><string>` + strconv.Itoa(port) +
+<key>Sockets</key><dict><key>Listeners</key><dict><key>SockNodeName</key><string>` + esc(addr) + `</string><key>SockServiceName</key><string>` + strconv.Itoa(port) +
 		`</string><key>SockType</key><string>stream</string><key>SockFamily</key><string>IPv4</string></dict></dict>
 <key>EnvironmentVariables</key><dict>`)
 	for k, v := range env {
@@ -110,8 +111,8 @@ func LaunchdPlist(label string, argv []string, port int, env map[string]string, 
 	return b.String()
 }
 
-func SystemdUnits(label string, argv []string, port int, env map[string]string) (string, string) {
-	sock := fmt.Sprintf("[Unit]\nDescription=errand: %s\n\n[Socket]\nListenStream=127.0.0.1:%d\n\n[Install]\nWantedBy=sockets.target\n", label, port)
+func SystemdUnits(label string, argv []string, addr string, port int, env map[string]string) (string, string) {
+	sock := fmt.Sprintf("[Unit]\nDescription=errand: %s\n\n[Socket]\nListenStream=%s\n\n[Install]\nWantedBy=sockets.target\n", label, net.JoinHostPort(addr, strconv.Itoa(port)))
 	var words []string
 	for _, a := range argv {
 		words = append(words, "'"+strings.ReplaceAll(a, "'", `\'`)+"'")
@@ -123,9 +124,12 @@ func SystemdUnits(label string, argv []string, port int, env map[string]string) 
 	return sock, svc
 }
 
-// KeepPort: the system listens on `port` for `argv` from now on, and after each login
-func KeepPort(label string, argv []string, port int) error {
-	if why := keepRefused(); why != "" {
+// KeepPort: the system listens on `port` of `addr` ( "": 127.0.0.1 ) for `argv` from now on, and after each login
+func KeepPort(label string, argv []string, addr string, port int) error {
+	if addr == "" {
+		addr = "127.0.0.1"
+	}
+	if why := Refused(); why != "" {
 		return errors.New(why)
 	}
 	dir := filepath.Join(kit.LocalCache(), "kept")
@@ -137,7 +141,7 @@ func KeepPort(label string, argv []string, port int) error {
 	if runtime.GOOS == "darwin" {
 		where = filepath.Join(home, "Library", "LaunchAgents", label+".plist")
 		_ = os.MkdirAll(filepath.Dir(where), 0o755)
-		if err := os.WriteFile(where, []byte(LaunchdPlist(label, argv, port, keepEnviron(), filepath.Join(dir, label+".log"))), 0o644); err != nil {
+		if err := os.WriteFile(where, []byte(LaunchdPlist(label, argv, addr, port, keepEnviron(), filepath.Join(dir, label+".log"))), 0o644); err != nil {
 			return err
 		}
 		domain := fmt.Sprintf("gui/%d", os.Getuid())
@@ -153,7 +157,7 @@ func KeepPort(label string, argv []string, port int) error {
 		}
 		units := filepath.Join(base, "systemd", "user")
 		_ = os.MkdirAll(units, 0o755)
-		sock, svc := SystemdUnits(label, argv, port, keepEnviron())
+		sock, svc := SystemdUnits(label, argv, addr, port, keepEnviron())
 		where = filepath.Join(units, label+".socket")
 		if err := os.WriteFile(where, []byte(sock), 0o644); err != nil {
 			return err
@@ -209,6 +213,43 @@ func InheritedListener() (net.Listener, error) {
 
 // RelayKept: each connection to a kept port, relayed to what `reach` says, until none came for a while
 func RelayKept(l net.Listener, idle time.Duration, reach func() (net.Conn, error)) {
+	ServeKept(l, idle, func(c net.Conn) {
+		defer c.Close()
+		up, err := reach()
+		if err != nil {
+			body := "errand: " + err.Error() + "\n"
+			fmt.Fprintf(c, "HTTP/1.1 503 Service Unavailable\r\nContent-Type: text/plain\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s", len(body), body)
+			return
+		}
+		defer up.Close()
+		var wg sync.WaitGroup
+		wg.Add(2)
+		pump := func(from, to net.Conn) {
+			defer wg.Done()
+			buf := make([]byte, 64<<10)
+			for {
+				n, err := from.Read(buf)
+				if n > 0 {
+					if _, err := to.Write(buf[:n]); err != nil {
+						break
+					}
+				}
+				if err != nil {
+					break
+				}
+			}
+			if t, ok := to.(*net.TCPConn); ok {
+				_ = t.CloseWrite()
+			}
+		}
+		go pump(c, up)
+		go pump(up, c)
+		wg.Wait()
+	})
+}
+
+// ServeKept: each connection to a kept port, handed to `serve`, until none came for a while
+func ServeKept(l net.Listener, idle time.Duration, serve func(net.Conn)) {
 	var mu sync.Mutex
 	active, last := 0, time.Now()
 	go func() {
@@ -223,42 +264,12 @@ func RelayKept(l net.Listener, idle time.Duration, reach func() (net.Conn, error
 			mu.Unlock()
 			go func() {
 				defer func() {
-					c.Close()
 					mu.Lock()
 					active--
 					last = time.Now()
 					mu.Unlock()
 				}()
-				up, err := reach()
-				if err != nil {
-					body := "errand: " + err.Error() + "\n"
-					fmt.Fprintf(c, "HTTP/1.1 503 Service Unavailable\r\nContent-Type: text/plain\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s", len(body), body)
-					return
-				}
-				defer up.Close()
-				var wg sync.WaitGroup
-				wg.Add(2)
-				pump := func(from, to net.Conn) {
-					defer wg.Done()
-					buf := make([]byte, 64<<10)
-					for {
-						n, err := from.Read(buf)
-						if n > 0 {
-							if _, err := to.Write(buf[:n]); err != nil {
-								break
-							}
-						}
-						if err != nil {
-							break
-						}
-					}
-					if t, ok := to.(*net.TCPConn); ok {
-						_ = t.CloseWrite()
-					}
-				}
-				go pump(c, up)
-				go pump(up, c)
-				wg.Wait()
+				serve(c)
 			}()
 		}
 	}()

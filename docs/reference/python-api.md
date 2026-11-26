@@ -16,6 +16,7 @@ A project file needs `import errand`, then:
 | declaring | `configure`, `envs`, `Env`, `default_env`, `default_run`, `runners`, `providers`, `value` |
 | layers | `Vars` `Venv` `Micromamba` `Conda` `Uv` `Nix` `Guix` `Module` `Apptainer` `Docker` `Podman` `Ssh` `Slurm` `Mpi` `Preload` `Windows` `WindowsBox` `Missing` |
 | runners | `Runner` `Errand` `Pytest` `Catch2` `Cargo` `Python` `Executable` |
+| servers | `serve`, `http`, `Server`, `ServeError` |
 | the command line | `main` |
 
 ::: tip The import surface is cheap
@@ -248,39 +249,47 @@ errand, by `view` itself, a line on the error output. → True: the caller has n
 
 ## Services
 
-### Service, services
+### serve
 
 ```python
-errand.services[ name ] = errand.Service( command, *, env = None, gpus = None, gpu_ram = None, ram = None,
-                                          cpus = None, exclusive = False, label = None, busy = None,
-                                          ready = None, idle = "10m", ports = None, others = False,
-                                          grace = "10s", cwd = None )
+serve( command, *, on = None, vars = None, cwd = None, gpus = None, gpu_ram = None, ram = None, cpus = None, exclusive = False,
+       ports = None, others = False, busy = None, ready = None, idle = None, grace = None, keep = None, label = None,
+       version = None, version_of = (), listen = None, always = False, hold_end = None ) -> Server
 ```
 
-A server `errand serve NAME` starts if need be and stops when nobody uses it, declared in
-`~/.config/errand/services.py` or a project file.
+A server, by all that makes it: two requests that say the same are one server. Nothing is started, nor asked of errand, before the
+first `url`. errand's program ( `errand-run` ) has to be there; in a run, it is.
 
-- `ports`: `{ name: spec }`, a spec being `"ANNOUNCED:SERVER"` ( either side empty: errand chooses ), an
-  int ( the announced side ) or `None`. A bare spec is one port named `port`; the default is one port,
-  both sides chosen. The announced side is where clients connect and errand listens; the server's side
-  is given to the command.
-- `{port:NAME}` in `command` and in the values of `env` is the server's side of port NAME ( also
-  `$PORT_NAME` ); `{port}` and `$PORT` when there is one port.
-- `busy`: a function of the server's ports ( `{ name: port }` ), or a shell command ( exit 0 ) with the
-  same `{port...}`, saying the server is in the middle of something; failing counts as busy. `ready`:
-  a function of the server's ports, for a server that accepts connections before it can answer.
-- `others`: let other accounts of the machine connect ( closed by default, on Linux ).
+- `command`: a list, or a string split as a shell would. `{port}` ( `{port:NAME}` of several ), in it and in `vars`, is the server's side.
+- `on`: the machine it runs on, by its ssh name, or layers: `[ errand.Ssh( "lmo" ), errand.Micromamba( "jax" ) ]`, an `errand.Env`.
+- `ports`: `{ name: spec }`, a spec being `"ANNOUNCED:SERVER"` ( either side empty ), an int ( the announced side ) or `None`; a bare spec
+  is one port. `others`: other accounts of the machine may connect.
+- `busy`, `ready`: a line of shell ( exit 0 ), or `errand.http( path, field = None, port = None )`.
+- `version_of`: files, read where it runs, whose contents make another server; `version`: raised when something errand does not see changed.
+- Of its port, not of the server ( two requests that differ by these have two ports to one server ): `others`; `listen`, an address its port
+  is listened on too ( `"0.0.0.0"`: other machines may connect ); `always`, the system listens on it in errand's stead and starts errand at a
+  connection; `hold_end`, each connection's end held until the server was silent that long.
+- Not of what it is: `idle`, `grace`, `keep` ( how long its port stays; a day ), `label`.
+
+The same, from Node: `lib/node` ( `errand-lib` ), `serve( [ … ], { on, vars, gpus, … } )`, whose `url`, `port`, `call`, `state`, `wait`, `stop`,
+`release` return promises.
 
 → [errand serve](/guide/serve)
 
-### http_json
+### Server, ServeError
 
-```python
-http_json( path: str, predicate = bool, port: str = None )
-```
+| | |
+|---|---|
+| `url( path = "", port = None )` | where it is reached, on this machine: to be asked before **each** request. Answered from memory; errand is asked again at half of the lease |
+| `port( name = None )` | the number alone |
+| `call( fn, path = "", port = None )` | `fn( url )`; a connection that is refused asks errand again, once ( a machine that was restarted, an agent that was killed ). A server that does not start raises `ServeError`, with the reason |
+| `wait()` | started now, returned once it answers |
+| `state()`, `ask()` | how it is now; all errand answers |
+| `stop()` | it stops, for everybody; its port stays |
+| `release( now = False )` | its port is given back; `now`: it stops too |
 
-A `busy` probe: `GET http://127.0.0.1:<port><path>` on the server's side of port `port` ( default: the
-first ), its JSON given to `predicate`.
+`call` knows the failures of `urllib`, `requests`, `aiohttp` and whatever keeps the system's own error. `ServeError` is also what is raised when errand
+refuses the request: a program that is not there, more than the machine has.
 
 ## What only this machine can supply
 

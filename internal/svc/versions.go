@@ -2,17 +2,15 @@
 //
 // A version ( `blender#63ecc287` ) brings with it its declaration, its directory, its env, and a share of the code fetched
 // for it. It is USED when a store still present among the views registered here asks for it, when it runs, or when it ran
-// or was declared within N days. Unused, it goes with all that is its own; fetched code goes with the last version that
+// or was authorized within N days. Unused, it goes with all that is its own; fetched code goes with the last version that
 // needed it, or once nobody has needed it for N days. A pinned version stays.
 
 package svc
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -23,21 +21,22 @@ import (
 const VersionDays = 14.0 // unused after this many days
 
 type serviceVersionHere struct {
-	Key      string   `json:"key"`
-	Name     string   `json:"name"`
-	Version  string   `json:"version"`
-	Declared bool     `json:"declared"`
-	Pinned   bool     `json:"pinned"`
-	State    string   `json:"state"` // how it runs; declared; left, what of one that is not
-	Last     float64  `json:"last"`
-	Stores   []string `json:"stores"`
-	Env      string   `json:"env"`
-	Dir      string   `json:"keeper"`
-	Code     []string `json:"code"`
-	Size     int64    `json:"size"`
-	Whole    bool     `json:"whole"`
-	Unused   bool     `json:"unused"`
-	runs     bool
+	Key        string   `json:"key"`
+	Name       string   `json:"name"`
+	Version    string   `json:"version"`
+	Authorized bool     `json:"authorized"`
+	Pinned     bool     `json:"pinned"`
+	State      string   `json:"state"` // how it runs; authorized; left, what of one that is not
+	Last       float64  `json:"last"`
+	Stores     []string `json:"stores"`
+	Env        string   `json:"env"`
+	Dir        string   `json:"keeper"`
+	dirs       []string
+	Code       []string `json:"code"`
+	Size       int64    `json:"size"`
+	Whole      bool     `json:"whole"`
+	Unused     bool     `json:"unused"`
+	runs       bool
 }
 
 type CodeHere struct {
@@ -81,7 +80,7 @@ func storesAsking() map[string][]string {
 // VersionsHere: what is here, with its sizes and uses. `running`: the services the agents of this machine hold.
 func VersionsHere(running map[string]string, sizes bool, days float64) ([]*serviceVersionHere, []*CodeHere) {
 	now := kit.Seconds(time.Now())
-	declared, asked, code := InstalledHere(nil), storesAsking(), fetchedCode()
+	declared, asked, code := PageAuthorized(), storesAsking(), fetchedCode()
 	codeDirs := sortedKeys(code)
 	keys, envs := map[string]bool{}, map[string]string{}
 	for k := range declared {
@@ -94,9 +93,11 @@ func VersionsHere(running map[string]string, sizes bool, days float64) ([]*servi
 			envs[k], keys[k] = e, true
 		}
 	}
-	served, _ := filepath.Glob(filepath.Join(kit.LocalCache(), "serving", "*#*"))
-	for _, d := range served {
-		keys[filepath.Base(d)] = kit.IsDir(d)
+	served := map[string][]string{}
+	for _, d := range ServingDirs() {
+		if strings.Contains(d.Label, "#") {
+			served[d.Label], keys[d.Label] = append(served[d.Label], d.Dir), true
+		}
 	}
 	var versions []*serviceVersionHere
 	for _, k := range sortedKeys(keys) {
@@ -104,26 +105,31 @@ func VersionsHere(running map[string]string, sizes bool, days float64) ([]*servi
 			continue
 		}
 		d := declared[k]
-		v := &serviceVersionHere{Key: k, Declared: d != nil, Pinned: d["pinned"] == true, State: "left", Stores: asked[k], Env: envs[k], Code: []string{}, Whole: true}
+		v := &serviceVersionHere{Key: k, Authorized: d != nil, Pinned: d != nil && d.Pinned, State: "left", Stores: asked[k], Env: envs[k], Code: []string{}, Whole: true}
 		v.Name, v.Version = splitKey(k)
 		if v.Stores == nil {
 			v.Stores = []string{}
 		}
 		if d != nil {
-			v.State = "declared"
+			v.State = "authorized"
 		}
 		if st := running[k]; st != "" {
 			v.State, v.runs = st, true
 		}
-		if dir := filepath.Join(kit.LocalCache(), "serving", k); kit.IsDir(dir) {
-			v.Dir = dir
+		if v.dirs = served[k]; len(v.dirs) > 0 {
+			v.Dir = v.dirs[0]
 		}
 		v.Last = changedAt(filepath.Join(v.Dir, "keeper.log"), v.Env)
-		if at, err := time.ParseInLocation("2006-01-02 15:04:05", kit.Text(d["installed"]), time.Local); err == nil {
+		if d != nil && !parseStamp(d.Since).IsZero() {
+			at := parseStamp(d.Since)
 			v.Last = max(v.Last, kit.Seconds(at))
 		}
 		for _, c := range codeDirs { // what it runs from: its provider's, or a path of its command
-			for _, w := range append(kit.Strs(d["command"]), kit.Text(d["provider"])) {
+			words := []string{}
+			if d != nil {
+				words = append(d.Command(), d.Provider)
+			}
+			for _, w := range words {
 				if w == c || strings.HasPrefix(w, c+string(os.PathSeparator)) {
 					v.Code = append(v.Code, c)
 					break
@@ -168,13 +174,13 @@ func removeVersion(v *serviceVersionHere, all []*serviceVersionHere) (int64, err
 	if v.runs {
 		return 0, fmt.Errorf("%s is %s: errand serve stop %s first", v.Key, v.State, v.Key)
 	}
-	if v.Declared {
-		if err := changeInstalled(func(all map[string]map[string]any) { delete(all, v.Key) }); err != nil {
+	if v.Authorized {
+		if err := dropPage(v.Key); err != nil {
 			return 0, err
 		}
 	}
 	var freed int64
-	for _, p := range []string{v.Env, v.Dir} {
+	for _, p := range append([]string{v.Env}, v.dirs...) {
 		if p != "" {
 			freed += removeTree(p)
 		}
@@ -228,18 +234,4 @@ func PruneVersions(running map[string]string, days float64, dry bool) map[string
 }
 
 // PinVersion: a version kept out of the purge, or not any more
-func PinVersion(key string, on bool) error {
-	if InstalledHere(nil)[key] == nil {
-		known := []string{}
-		for k := range InstalledHere(nil) {
-			known = append(known, k)
-		}
-		sort.Strings(known)
-		return errors.New(key + " is not declared here ( declared: " + strings.Join(known, ", ") + " )")
-	}
-	return changeInstalled(func(all map[string]map[string]any) {
-		if delete(all[key], "pinned"); on {
-			all[key]["pinned"] = true
-		}
-	})
-}
+func PinVersion(key string, on bool) error { return PinPage(key, on) }

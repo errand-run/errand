@@ -1,9 +1,10 @@
 # Servers kept while used: errand serve
 
 ```bash
-errand serve --gpus 1 --gpu-ram 10G -- ollama serve     # started if need be; prints its address
-errand serve                                           # the services of this machine
-errand serve stop ollama
+errand serve --gpus 1 --gpu-ram 10G -- ollama serve     # its address: the first connection starts it
+errand serve                                           # the servers of this machine, and the ports kept for them
+errand serve stop ollama                               # the server; its port stays
+errand serve release ollama                            # the port, given back
 ```
 
 Some work is a server: an LLM that answers an application, a viewer that serves the frames of a run.
@@ -19,8 +20,36 @@ never left behind. Its share of the machine goes through the [queue](./machine),
   and the server not busy.
 - **Its share given back while it rests.** In use, its claim is firm. Idle, it is kept warm: a
   computation that needs the card asks it to go, and it goes.
-- **One address, kept.** The port is chosen once for the name and kept, so a client, a tunnel or a
-  bookmark keeps working from one start to the next.
+- **One address, kept.** The port is the server's as long as its [lease](#a-port-and-until-when) runs, whether the server
+  is up or not, so a client, a tunnel or a bookmark keeps working from one start to the next.
+
+## A port, and until when
+
+A request says everything that makes the server, and is given a port: **until its lease is over, that port is listened on, and leads
+to that server or to nothing**. Nothing is started by the request. A connection that finds the server stopped starts it, and waits.
+
+```text
+$ errand serve --keep 2h -- ollama serve
+ollama  http://127.0.0.1:24997  ( rests, kept 2 h )
+```
+
+- `--keep` says for how long after the last request or connection; a day, if it is not said; two hours at most on a machine shared with others.
+- The agent stays as long as it holds a lease. Another agent ( another version of errand, or the next one after it was killed )
+  opens the same ports: any errand command starts it.
+- The number, between 20000 and 29999, stays this server's fourteen days after its last use: asked again, it is the same. `--port N` imposes
+  one: refused, saying by whom it is held, if it is.
+- What the machine does not have, or a program that does not exist, is refused at once. A server that does not start closes the connection; the
+  reason is said by the next request, `errand serve` and the page, and the next connections are refused for two seconds, then twice as long each
+  time, up to a minute. `--wait` starts it and waits until it answers.
+- `--json`, for a program: `{ "url", "urls", "ports", "until", "again_in", "state", "why", "config", "label" }`; ask again after `again_in` seconds, or when a
+  connection is refused. `errand serve release` gives it back ( `--now`: the server stops too ).
+
+**Same definition, same server.** The definition is the command, the variables *written* ( `--var A=1` ), the directory ( `--cwd`, default: the home ),
+the needs, the ports' names and fixed sides, the probes, the contents of `--version-of FILE`, `--server-version`. Two requests that agree on these have one
+server, whatever their label, `--idle`, `--grace` or `--keep`: while several run, the longest counts. One that differs is another server beside, at
+another port; nothing is stopped. A program that was updated is another server behind the same port.
+
+The name is a label. `stop ollama` stops every server that carries it, `stop ollama~c7ae` the one of that hash. → [ADR 0040](https://github.com/errand-run/errand/blob/main/docs/adr/0040-a-server-is-what-is-asked-for.md)
 
 ## Two sides, errand in between
 
@@ -90,37 +119,58 @@ Both sides can be fixed, but they cannot be the same number: errand listens on o
 the other. To have the server where its clients expect it ( Ollama's `11434` ), fix the
 **announced** side to that number, and let the server's be chosen.
 
-## Ad hoc, or declared
-
-On the command line, the server's command after `--`:
+## All of it, in the request
 
 ```bash
-errand serve --name ollama --gpus 1 --gpu-ram 10G --idle 10m --port 11435 \
-             --busy-if 'curl -s localhost:{port}/api/ps | grep -q "\"name\""' \
-             -- env OLLAMA_HOST=127.0.0.1:{port} ollama serve
+errand serve --name ollama --gpus 1 --gpu-ram 10G --idle 10m --busy-http /api/ps:models \
+             --var OLLAMA_HOST=127.0.0.1:{port} -- ollama serve
 ```
 
-Or declared once, in `~/.config/errand/services.py` ( it belongs to a machine and a user, not to a
-project ), or in any `errand-*.py` of a project:
+There is no file of declarations: two requests that say the same are given the same server. Keep the line in a script, or say it
+from a program.
+
+### From a program
 
 ```python
-# ~/.config/errand/services.py
-import errand
+import errand, requests
 
-errand.services[ "ollama" ] = errand.Service(
-    [ "ollama", "serve" ],
-    env   = { "OLLAMA_HOST": "127.0.0.1:{port}" },
-    gpus  = 1, gpu_ram = "10G", label = "ollama",
-    busy  = errand.http_json( "/api/ps", lambda r: bool( r[ "models" ] ) ),
-    idle  = "10m",
-    ports = 11435 )            # leave it out: errand chooses one, once, and keeps it
+ollama = errand.serve( [ "ollama", "serve" ], on = "lmo", vars = { "OLLAMA_HOST": "127.0.0.1:{port}" }, gpus = 1, gpu_ram = "10G",
+                       busy = errand.http( "/api/ps", field = "models" ), idle = "2m", keep = "1d" )
+
+requests.post( ollama.url( "/api/chat" ), json = { ... } )                        # the url before each request: it costs nothing
+ollama.call( lambda url: requests.post( url, json = { ... } ), "/api/chat" )      # ... and once more if its connection is refused
 ```
 
-```bash
-errand serve ollama         # its address, once it answers
+→ [The Python API](/reference/python-api#services). From Node, the same words ( `lib/node`, `errand-lib` ):
+
+```js
+import { serve, http } from "errand-lib";
+
+const ollama = serve( [ "ollama", "serve" ], { on: "lmo", vars: { OLLAMA_HOST: "127.0.0.1:{port}" }, gpus: 1, gpu_ram: "10G",
+                      busy: http( "/api/ps", { field: "models" } ), idle: "2m", keep: "1d" } );
+
+const r = await ollama.call( url => fetch( url, { method: "POST", body } ), "/api/chat" );   // url(), port(), state(), wait(), stop(), release()
 ```
 
-`{port}`, in the command and in `env`, is the server's side of the port; `$PORT` holds it too. The
+Any other language does the same with one command, `errand serve --spec - --json`: the request on its standard
+input, its answer on the output, `{ "error" }` when it is refused.
+
+```json
+{ "command": [ "ollama", "serve" ], "on": "lmo", "vars": { "OLLAMA_HOST": "127.0.0.1:{port}" }, "gpus": 1, "gpu_ram": "10G",
+  "busy": { "http": "/api/ps", "field": "models" }, "ports": [ [ "port", null ] ], "idle": "2m", "keep": "1d", "label": "ollama" }
+```
+
+The other keys: `cwd`, `ram`, `cpus`, `exclusive`, `others`, `listen`, `always`, `hold_end`, `ready`, `grace`, `version`, `version_of`; `on` is also a
+list of layers, as data. The answer: `url`, `urls`, `ports`, `address` ( where they are reached from here ), `until`, `again_in` ( seconds: ask again
+then, or when a connection is refused ), `state`, `why`, `config`, `label`, `on`.
+
+`others`, `listen`, `always`, `hold_end` and a fixed announced number are of the port, not of the server: two requests that differ by
+them have two ports, to one server.
+
+A server takes its own share of the machine, beside the one of the run that asks for it: a run that holds all of a machine would wait for
+a server that waits for it.
+
+`{port}`, in the command and in the variables, is the server's side of the port; `$PORT` holds it too. The
 cards granted are given as a run gets them ( `CUDA_VISIBLE_DEVICES`... ).
 
 ## Several ports, named
@@ -128,26 +178,16 @@ cards granted are given as a run gets them ( `CUDA_VISIBLE_DEVICES`... ).
 A server that listens on several ports names each of them; the command gets each one's server side
 as `{port:NAME}`, and the environment as `$PORT_NAME`:
 
-```python
-errand.services[ "triton" ] = errand.Service(
-    [ "tritonserver", "--model-repository", "/models",
-      "--http-port", "{port:http}", "--grpc-port", "{port:grpc}", "--metrics-port", "{port:metrics}" ],
-    gpus  = 1,
-    ports = { "http":    8000,          # announced 8000, the server's chosen at each start
-              "grpc":    "8001:18001",  # both fixed: announced 8001, the server on 18001
-              "metrics": None } )       # both chosen, the announced one kept
-```
-
 ```bash
-errand serve triton                 # triton  http http://127.0.0.1:8000  grpc http://127.0.0.1:8001  metrics ...
-errand serve triton --url grpc      # http://127.0.0.1:8001
-errand serve --port http=8000 --port grpc=8001:18001 -- tritonserver --http-port {port:http} ...
+errand serve --name triton --gpus 1 --port http=8000 --port grpc=8001:18001 --port metrics= -- \
+       tritonserver --model-repository /models --http-port {port:http} --grpc-port {port:grpc} --metrics-port {port:metrics}
+# triton  http http://127.0.0.1:8000  grpc http://127.0.0.1:8001  metrics http://127.0.0.1:23817  ( rests, kept 24 h )
+errand serve triton --url grpc      # http://127.0.0.1:8001  ( by its name, once it was asked for )
 ```
 
-A port is `"ANNOUNCED:SERVER"`, either side left empty for errand to choose ( `":18001"`, `"8000:"` ),
-an int for the announced side, or `None`. A single port without a name is called `port`, and `{port}`
+A port is `ANNOUNCED:SERVER`, either side left empty for errand to choose ( `:18001`, `8000:` ). A single port without a name is called `port`, and `{port}`
 is its server side; with several, `{port}` alone is refused, and so is a `{port:NAME}` that names
-none of them, when the service is declared rather than when it starts. A fixed server side that is
+none of them, when it is asked for rather than when it starts. A fixed server side that is
 already taken stops the start with `port grpc: the server's side, 18001, is taken`.
 
 The service is in use as long as a connection is open on any of its ports; `ready`, by default, is
@@ -159,57 +199,71 @@ On 127.0.0.1, a port is open to every account of the machine. errand closes, at 
 that comes from another account: on Linux it reads, in `/proc/net/tcp`, which uid opened it. A tunnel
 of yours ( `ssh -L`, `errand serve connect` ) is yours, and passes. `keeper.log` notes each one closed.
 
-```python
-errand.Service( ..., others = True )      # every account of the machine may connect
-```
-
-`--others` on the command line. Elsewhere ( macOS, Windows ) errand cannot tell, and relays every
+With `--others`, every account of the machine may connect. Elsewhere ( macOS, Windows ) errand cannot tell, and relays every
 connection; the server's own access control is then the protection.
 
 The server's side is not guarded this way: another account that finds it connects to the server
 directly. It changes at each start, unless fixed. A server that can listen on a Unix socket, or run
 in a network namespace of its own, closes that door too; errand does not do it for you yet.
 
+## Other machines: --listen
+
+```bash
+errand serve --listen 0.0.0.0 --gpus 1 --var OLLAMA_HOST=127.0.0.1:{port} -- ollama serve
+```
+
+The port is listened on at that address too ( `0.0.0.0`: every one of the machine; `100.64.1.2`: that one, a VPN's say ), and other
+machines may connect: nothing tells who they are, the server's own access control is the protection. It is asked for each time,
+never by default; a machine shared with others refuses it. Without it, the same request has its own port, at 127.0.0.1, to the same
+server. A port listened on at one address is reached there from the machine itself too: the answer's `address` and `url` say it.
+
+## A port the system keeps: --always
+
+A program that asks errand ( the libraries, `errand serve` ) wakes it: an agent that was stopped, a machine that was restarted, it
+starts one again, which listens on the same ports. A client that only has the number ( a browser, a container's configuration )
+wakes nothing.
+
+```bash
+errand serve --always --keep 30d --name ollama -- ollama serve
+```
+
+`--always` hands the port to the system ( launchd on macOS, `systemd --user` on Linux ): it listens in errand's stead, and at a
+connection starts `errand serve kept-lease`, which starts an agent if there is none and relays the connection to it. No agent
+waits for it between two uses. When the lease is over or given back ( `errand serve release` ), the system lets the port go. Asked
+for each time; refused on a cluster, or on a machine shared with others ( ADR 0028 §6 ).
+
 ## Ollama, from start to answer
 
-Clients talk to the **announced** port ( `11435` here, or the one errand chose and kept ), never to
+Clients talk to the **announced** port, never to
 `{port}`: that is the server's side, and changes at each start.
 
 ```bash
-$ errand serve ollama
-ollama  http://127.0.0.1:11435  ( warm )
+$ errand serve --name ollama [...] -- ollama serve
+ollama  http://127.0.0.1:24997  ( rests, kept 24 h )
 
-$ curl -s http://127.0.0.1:11435/api/generate \
+$ curl -s http://127.0.0.1:24997/api/generate \
        -d '{ "model": "qwen3:14b", "prompt": "Why is the sky blue?", "stream": false }'
 {"model":"qwen3:14b","response":"Sunlight scatters off air molecules...", ...}
 ```
 
-Without a `port =`, errand chooses one the first time and keeps it. `--url` prints only the address,
-for a script, and starts the server if need be:
+`--url` prints only the address, for a script; the first connection starts the server:
 
 ```bash
-export OLLAMA_HOST=$( errand serve ollama --url )     # http://127.0.0.1:41873, the same at each start
+export OLLAMA_HOST=$( errand serve ollama --url )     # http://127.0.0.1:24997, the same as long as its lease runs
 ollama run qwen3:14b "Why is the sky blue?"            # the ollama command line is a client too
 ```
 
 From Python, with the `ollama` package or anything that speaks HTTP:
 
 ```python
-import subprocess, ollama
+import errand, ollama
 
-url = subprocess.check_output( [ "errand", "serve", "ollama", "--url" ], text = True ).strip()
-client = ollama.Client( host = url )
+server = errand.serve( [ "ollama", "serve" ], vars = { "OLLAMA_HOST": "127.0.0.1:{port}" }, gpus = 1, gpu_ram = "10G" )
+client = ollama.Client( host = server.url() )
 print( client.generate( model = "qwen3:14b", prompt = "Why is the sky blue?" )[ "response" ] )
 ```
 
-From your laptop, through ssh, to the same announced port:
-
-```bash
-ssh -N -L 11435:127.0.0.1:11435 lmo &      # once; then http://127.0.0.1:11435 here
-ssh lmo errand serve ollama --ensure       # started if need be ( or `connect`, below )
-```
-
-What follows, on lmo's card:
+From your laptop, the same with `--on lmo` ( [below](#on-another-machine-in-an-environment) ). What follows, on lmo's card:
 
 ```text
 waiting      the card is held by a computation: the claim waits its turn, a request waits with it
@@ -231,9 +285,9 @@ connection to the server. So it counts the open connections itself, on every sys
 
 - **A connection open** means used, silent or not: a server that thinks for an hour before
   answering is not abandoned.
-- **The probe saying busy** means used, with no connection: Ollama with a model loaded. `busy` is a
-  function of the port ( `errand.http_json( path, predicate )` for a JSON endpoint ) or `--busy-if`, a
-  shell command that exits 0 when busy. **A probe that fails or does not answer counts as busy**: a
+- **The probe saying busy** means used, with no connection: Ollama with a model loaded. `--busy-http /api/ps:models`
+  asks the server for that path and looks at a field of its JSON ( `a.b` goes inside; busy unless it is missing, false, 0 or
+  empty ), `--busy-if` is a shell command that exits 0 when busy. `--ready-http` and `--ready-if` say, likewise, that it answers. **A probe that fails or does not answer counts as busy**: a
   saturated server is in the middle of something.
 - Neither: the `idle` clock runs, and starts again from zero at the next connection.
 
@@ -251,28 +305,58 @@ nobody waits for it any more ( no connection, no `errand serve` waiting ) for `i
 
 - after `idle` without connection nor busy;
 - warm, when a computation needs its share ( `errand queue` shows it `kept warm: gives way` );
-- with `errand serve stop NAME`, or Ctrl-C under `errand serve -f`;
-- when the server ends by itself. It is not restarted: the next `errand serve` starts it again.
+- with `errand serve stop NAME` ( its port stays: the next connection starts it again ), or Ctrl-C under `errand serve -f`;
+- when the server ends by itself. It is not restarted: the next connection starts it again.
 
 It is stopped as everything errand starts: INT, then TERM, then KILL after `grace` ( 10 s ), on its
 whole process group. Then its claim is released.
 
+## Those who may not say a command: authorizations
+
+A page, and an ssh key meant for one server, must not send a command. Both give a **hash**, which the machine that serves
+knows or refuses ( ADR 0040 ). What is authorized is written on that machine, in full, in `~/.config/errand/authorized-services.json`
+( its user's alone ):
+
+```bash
+errand serve authorize --to key:boucles --on lmo --gpus 1 --idle 2m --var OLLAMA_HOST=127.0.0.1:{port} -- ollama serve
+# 3f2a91c0  ollama authorized to key:boucles on lmo   ollama serve
+errand serve authorized --on lmo              # what is authorized there, to whom, since when, last used; what was refused lately
+errand serve withdraw --on lmo 3f2a91c0       # to no one any more ( --to key:boucles: from that one only )
+```
+
+- The authorization sets everything: the command, the needs, `--idle`, `--keep`. The asker gives only the hash. It is the hash of the
+  definition as that machine reads it: the same as `errand serve --on lmo … -- ollama serve` gets, and so the same server.
+- `--to pages NAME#VERSION` is for pages ( below ); `--to key:NAME` for a key.
+- What you ask for yourself, by your own link, does not go through it.
+- Values of variables named `…TOKEN`, `KEY`, `SECRET`, `PASSWORD` are not shown, by `authorized`, `status` and the page.
+- A withdrawal cuts no connection already open.
+- The page shows them in the Machines tab, with what was refused lately: `withdraw` on one; `authorize to pages` on a page's request
+  that was refused, its whole command shown before.
+
 ## Through ssh: connect
 
 ```bash
-errand serve connect ollama
+errand serve connect 3f2a91c0
 ```
 
-ensures the service, then relays this process's stdin and stdout to it ( `connect ollama PORT` for
-another port than the first ). It is what a key in
-`authorized_keys` forces, for a tunnel that starts the server when it is used:
+ensures the server of that hash, then relays this process's stdin and stdout to it ( `connect HASH PORT` for another port than
+the first ). The hash is an authorization's, or the one `errand serve --json` gives ( `config` ) for what you asked for yourself.
+It is what a key in `authorized_keys` forces, for a tunnel that starts the server when it is used:
 
 ```text
-restrict,command="$HOME/.cache/errand/bin/errand serve connect ollama" ssh-ed25519 AAAA… boucles@laptop
+restrict,command="/.cache/errand/bin/errand serve connect 3f2a91c0" ssh-ed25519 AAAA… boucles
+```
+
+The client behind such a key needs no errand. A key whose other side has one is given `errand there --only key:NAME` instead: a link
+of errand's, on which that errand may say `hello` and reach, by their hash, the servers authorized to `key:NAME`, and nothing else
+( no run, no file, no other machine, no errand sent to replace this one ). The filter is on the machine that serves:
+
+```text
+restrict,command="/.cache/errand/bin/errand there --only key:boucles" ssh-ed25519 AAAA… boucles
 ```
 
 That path is [errand's stable name](./layers/ssh#under-a-name-that-does-not-change) on a machine it was sent to: nothing is
-installed there, and it follows the version the clients send. The client behind such a key needs no errand.
+installed there, and it follows the version the clients send.
 
 - **The input ends** ( `printf … | ssh lmo`, `nc -N` ): the end is passed on to the server, as the half-close of a TCP
   connection ( `SHUT_WR` ), and the answer is relayed until the server closes. The same goes for the announced port. A server
@@ -288,7 +372,7 @@ client that left: it cancels the request. Ollama is one: with a model loaded it 
 it never answers, nor closes ( 0.40.16 ). errand has no part in it: `nc -N` straight to Ollama does the same.
 
 ```bash
-errand serve connect ollama --hold-end 30s
+errand serve connect 3f2a91c0 --hold-end 30s
 ```
 
 `connect` then keeps the end of its input until the server has answered, then been silent for 30 s; it may think as long as
@@ -296,52 +380,49 @@ it wants before. Choose it longer than the longest silence in the middle of an a
 server that keeps its connections open ( HTTP/1.1 ) closes this one, which is no longer counted; with `Connection: close` in
 the request, the server closes by itself, at once.
 
-Each connection says it for itself ( in the key's line, for a forced command ): the server's declaration is not concerned, nor
-restarted, and other connections to it do as they want.
+Each connection says it for itself ( in the key's line, for a forced command ): the server is not concerned, nor restarted, and
+other connections to it do as they want.
 
-It is for `connect` alone, whose client's leaving is known otherwise. On the announced port and through `forward`, the end is
-passed on at once: there, it is how the server knows that a client left, and stops what it asked.
+A port can say it too, for all of its connections: `errand serve --hold-end 30s … -- ollama serve` is another port to the same
+server. On a port that does not say it, the end is passed on at once: there, it is how the server knows that a client left, and
+stops what it asked.
 
 ### While errand is updated
 
-A service stays with the agent that started it, on the same port, until it stops: an update cuts no connection, and whichever
-version asks finds it. Started again, it is the new version's, on the same announced port. One that is always in use stays
+A server stays with the agent that started it until it stops, and its port goes to the new version's agent: an update cuts no connection.
+Started again, it is the new version's, behind the same port. One that is always in use stays
 with the version it began with: `errand serve stop NAME`, and the next that asks starts it again.
 
-## From here: forward
+## On another machine, in an environment
 
 ```bash
-errand serve forward ollama --host lmo            # or --env E: the machine of that environment
+errand serve --on lmo --gpus 1 --gpu-ram 10G -- ollama serve     # http://127.0.0.1:27311, on this machine
+errand serve --env jax-lmo -- python viewer.py --port {port}     # ... in an environment of the project
 ```
 
-prints `http://127.0.0.1:PORT` (`--port N` to choose it). Every connection to that port goes to
-the service over there: through the agents' connection that errand already holds, one channel
-per connection, with no new ssh login and no tunnel to set up. The first connection starts the
-service there, waiting in the queue if needed. As for a page, only a service **declared** on that
-machine can be reached, never a port named from here. Ctrl-C stops the forward, not the service:
-it stops on its own once idle.
+The port is on **this** machine, whichever the server runs on. Each connection goes by the link errand holds to that machine: no
+tunnel to set up, no new ssh login. Its first one starts the server there, which waits in that machine's queue if need be. What the
+machine lacks ( the program, the cards ) is said at once; a machine that is away keeps its port, whose connections are closed
+meanwhile.
 
-The forward holds its port only while it runs. To keep it for clients that come at any time ( a
-family server using Ollama on lmo ):
+The server belongs to the agent of its machine, which counts everybody's connections: two machines that ask for the same
+one share it, under one account. `errand serve stop` from any of them stops it; `errand serve list --host lmo` says how it is there.
 
-```bash
-errand serve forward ollama --host lmo --port 11500 --keep        # --keep --off gives it back
-```
+`--env` takes an environment of the project in full ( it is part of the definition ): `Ssh` first, then `Vars`, `Module`, `Venv`,
+`Uv`, `Micromamba`, `Conda`. Containers, Slurm and Windows: not yet. A machine's own environments have to be there: a server
+builds none ( `errand setup` does ).
 
-The system then listens on 11500 and starts the forward at the first connection; the forward goes
-after ten minutes without one, and lmo's side wakes as it always does.
-
-From Python, `errand.serve.forward( target, name )` returns the listening socket, e.g. to put a
-service of another machine behind a page.
+**Its surroundings** are those of a login shell of its machine, then the layers, then the variables written ( `--var` ): never those
+of the terminal it was typed in, nor of what started errand's agent.
 
 ## Seen
 
 ```text
 $ errand serve
-  ollama           busy       127.0.0.1:11435    1 connection
+  ollama               busy       127.0.0.1:11435 1 connection  kept 23 h 59
 $ errand status
 running   ( on lmo: this machine )
-  lmo: service ollama busy  127.0.0.1:11435, 1 connection
+  lmo: service ollama busy  1 connection
 $ errand queue
   ollama ( service )  gpus=1, gpu_ram=10G  gpu 0  12 min  pid 4121
 ```
@@ -403,9 +484,9 @@ mytool = "mytool.services"
 - **The version** of a service is 8 hex digits of a sha256 over its protocol and the files
   `version_of` lists. The producer computes it when it writes a directory, and errand computes the
   same on each machine by reading those files. errand never imports the package. Any edit to one
-  of those files gives a new version: a machine that declared the old one shows the service as
+  of those files gives a new version: a machine that authorized the old one shows the service as
   `wrong version`, and a store written after the edit shows it as `installable` again. A new
-  `install` line declares the new version beside the old one.
+  `authorize` line authorizes the new version beside the old one.
 
 ### The directory says what it asks for
 
@@ -448,7 +529,7 @@ file, its page cannot read the files beside it: it shows that line, with its pat
 
 The states are:
 
-- `running` or `ready`: declared at this version;
+- `running` or `ready`: authorized to pages at this version;
 - `installable`: the lines below make it ready;
 - `unknown`: a version could not be read from files;
 - `unavailable`: greyed, with the reason;
@@ -459,7 +540,8 @@ The relayed request carries **`X-Errand-Root`**: the directory as the service's 
 ( the original, a shared file system, or errand's copy ), percent-encoded.
 
 **Only what both sides name runs.** A page reaches a service only if its `services.json` lists
-`name#version` *and* the machine declares exactly that. Nothing a page sends declares a command.
+`name#version` *and* the machine authorizes exactly that to pages. Nothing a page sends says a command: the page gives the
+portable `name#version` of its store, and the authorization leads from it to a definition with that machine's paths.
 
 ### The lines to type
 
@@ -475,7 +557,7 @@ lmo  linux-x86_64  RTX 2080 Ti   the store: original /home/hugo/runs/foam.sviz
       # blender 5.2.2 from download.blender.org into errand's cache on lmo ( checked against its sha256 8409…a168 ); nothing in it is run
       errand serve fetch --on lmo https://download.blender.org/…/blender-5.2.2-linux-x64.tar.xz#sha256=8409…
       # the service blender#3fa29c1e, as sdot 2026.11.3 in lmo-jax describes it, GPU 1, stopped after 10m unused
-      errand serve install --on lmo --gpus 1 --idle 10m blender#3fa29c1e -- /home/hugo/.cache/errand/tools/8409…/unpacked/… -b …
+      errand serve authorize --to pages --on lmo --gpus 1 --idle 10m blender#3fa29c1e -- /home/hugo/.cache/errand/tools/8409…/unpacked/… -b …
 ```
 
 - `errand serve fetch --on M URL#sha256=H`: a file, checked against its hash and kept by its
@@ -484,21 +566,22 @@ lmo  linux-x86_64  RTX 2080 Ti   the store: original /home/hugo/runs/foam.sviz
   that service's own env ( `pip:PKG==V` from an index works the same way ).
 - `errand serve fetch --on M git:URL@COMMIT`: only the files of the repository at that commit, for a
   service that needs no Python env of its own ( Blender runs `blender.py` with its own Python ).
-- A source outside `errand.sources` is refused unless you repeat it with `--source URL`. The list
-  holds PyPI, conda-forge and download.blender.org by default, and repository prefixes you add in
-  `services.py`. The repository of a package already installed here also counts as known.
+- A source outside the list is refused unless you repeat it with `--source URL`. The list
+  holds PyPI, conda-forge and download.blender.org by default, and what you add: `errand serve source URL` ( `--off` ), in
+  `~/.config/errand/config.json`. The repository of a package already installed here also counts as known.
 - A directory written from changes that were never committed has no commit that holds its
   version. The page says so, and the lines then use a checkout of the machine ( `CHECKOUT` ).
-- `errand serve install --on M NAME#VERSION -- WORDS` declares the service as typed, into
-  `services-installed.json` on M. It records the package that provides that version, and that
+- `errand serve authorize --to pages --on M NAME#VERSION -- WORDS` authorizes the service to pages as typed, in
+  `authorized-services.json` on M. It records the package that provides that version, and that
   package's files are checked again before every start. If they changed, the state is
-  `wrong version` and the service does not start. With no package behind it, the declaration is
+  `wrong version` and the service does not start. With no package behind it, the authorization is
   `unverified`. Without `-- WORDS`, the command is composed from the package there, shown, and
-  asked.
+  asked. Authorized again, `NAME#VERSION` leads to the new definition alone. Two versions are two servers, whatever runs them.
 - `errand serve probe --on M -- PROG --version` runs a program once to read a version that no file
   says. Nothing else runs a program to look at it.
 
-`errand serve` and `errand status` list every declared service, `ready` before it ever ran.
+`errand serve` lists every authorization, `authorized` when its server does not run; a page's request that was refused is in
+`errand serve authorized` and in the page, where one click ( after the whole command is shown ) authorizes it.
 
 **Without errand** ( the directory under `python -m http.server`, or sent to someone ):
 `.errand/services` answers 404, and the page works on its files alone. By convention, a page then
@@ -512,26 +595,25 @@ a service answers CORS for `127.0.0.1` and `localhost`, because the page is on a
   find the card full.
 - **The server's side of a port is open to every account of the machine**, and so is the announced
   side outside Linux ( see [Only your connections](#only-your-connections) ).
-- **From another machine**: `errand serve forward` ( above ), or `errand serve connect` behind an ssh key.
+- **From another machine**: `--on` ( above ), or `errand serve connect` behind an ssh key.
 
 ### Developing a service
 
 While working on a service, a new version at each edit is in the way. On this file system, say that a
-repository is represented by the checkout you work on, in your global file:
+repository is represented by the checkout you work on:
 
-```python
-# ~/.config/errand/services.py
-errand.dev_sources[ "github.com/sdot-team/sdot" ] = errand.Checkout( "~/Projects/sdot-ffi", env = "prj-jax" )
+```bash
+errand serve dev github.com/sdot-team/sdot ~/Projects/sdot-ffi --env prj-jax      # --off: no more
 ```
 
 A page whose store asks for a service of that repository then runs it from the checkout, whatever its
 version: as the checkout describes it ( its own `errand-services.json` ), a Python service in the env
 named, under the name `NAME#dev`. An edit of the files its version is computed over is seen at the next
-connection: the service is declared again and restarted. A page chooses, per service, between the
+connection: the service is authorized again and restarted. A page chooses, per service, between the
 checkout ( by default, when there is a usable one ) and the store's version.
 
 A copy of the project on another machine ( the copy errand keeps for the runs there ) carries it: the
-checkout inside the copy is a dev source on that machine too, with `envs = { "lmo": "lmo-jax" }` for the
+checkout inside the copy is a dev source on that machine too, with `"envs": { "lmo": "lmo-jax" }` in `config.json` for the
 env there. It is only as fresh as the last push. The storage tab lists the dev sources under their disk,
 and `d` turns one off ( or on again ): a line in that disk's configuration, never in a store.
 

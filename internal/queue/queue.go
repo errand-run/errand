@@ -247,13 +247,7 @@ func At(dir string, cap Capacity) *Queue {
 	return &Queue{Dir: dir, Host: Host(), Cap: cap, now: time.Now, alive: holderAlive}
 }
 
-func Host() string {
-	h, _ := os.Hostname()
-	if h = strings.SplitN(h, ".", 2)[0]; h == "" {
-		return "localhost"
-	}
-	return h
-}
+func Host() string { return system.ShortHost() }
 
 // Dir: per user AND per host. `XDG_RUNTIME_DIR` when it is usable ( set is not the same as usable: a service, a
 // container can inherit the variable without the directory ), the temporary directory otherwise. Two allocations of

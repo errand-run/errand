@@ -44,4 +44,4 @@ is in the history of the repository that was errand before this one.
 | [0037](0037-distributed-by-pip-built-on-purpose.md) | Distributed by pip, one wheel per system; built on purpose | accepted |
 | [0038](0038-what-is-not-errands-stops-a-push.md) | What is not errand's stops a push; a place may have its cache; a journal is watched | proposed |
 | [0039](0039-builds-are-in-errand-s-caches.md) | Builds go where errand keeps its caches; what is costly stays longer than what is not | accepted |
-| [0040](0040-servers-of-one-name-coexist.md) | Servers of one name coexist: a service is its name and what makes its answers | proposed |
+| [0040](0040-a-server-is-what-is-asked-for.md) | A server is what is asked for, and is given a port on the asker's machine | accepted |

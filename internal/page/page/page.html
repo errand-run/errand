@@ -74,7 +74,7 @@ body.dragging { user-select: none; }
 .row.note .label, .row.more .label { color: var(--dim); }
 .row.broken .right { color: var(--bad); }
 .hit { color: var(--acc); font-weight: 700; }
-.m-run, .m-ok { color: var(--ok); } .m-wait { color: var(--wait); } .m-FAIL, .m-orph, .m-lost { color: var(--bad); } .m-dead { color: var(--wait); } .m-skip { color: var(--dim); } .m-there { color: var(--wait); }
+.m-run, .m-ok { color: var(--ok); } .m-wait { color: var(--wait); } .m-FAIL, .m-orph, .m-lost, .m-refused { color: var(--bad); } .m-dead { color: var(--wait); } .m-skip { color: var(--dim); } .m-there { color: var(--wait); }
 .row.machine .label, .row.broken .label, .row.dormant .label { flex: none; width: 24ch; }   /* the gauges in one column */
 .meters { display: flex; gap: 14px; color: var(--dim); flex: none; }
 .meter { display: flex; align-items: center; gap: 5px; width: 15ch; }
@@ -257,7 +257,7 @@ footer kbd { font: inherit; color: var(--fg); }
 <div class="veil" id="veil"><div class="box" id="box"></div></div>
 <script>
 "use strict";
-const SIGNS = {run: "●", wait: "◌", ok: "✓", FAIL: "✗", skip: "–", lost: "?", orph: "?", dead: "✗", going: "·", there: "◇"};
+const SIGNS = {run: "●", wait: "◌", ok: "✓", FAIL: "✗", refused: "⊘", skip: "–", lost: "?", orph: "?", dead: "✗", going: "·", there: "◇"};
 // what the detail says always; the rest is folded ( `more` )
 const RARE = new Set(["pid", "agent", "id", "outputs", "reached", "host", "keeper", "qemu", "port", "image", "warm", "agents", "said"]);
 const OPENED_IN_A_TAB = /\.(html?|svg|pdf|png|jpe?g|gif|webp|bmp)$/i;
@@ -645,7 +645,9 @@ function drawDetail() {
   const isWork = det.kind == "proc" || det.kind == "run";
   let h = isWork ? runHead(f) : `<h2>${esc(det.title)}</h2>`;
   let tools = "";
-  if (can.kill) tools += `<button class="danger" data-act="kill">${row && (row.kind == "machine" || row.kind == "broken") ? "kill all" : "kill"}<kbd>k</kbd></button>`;
+  if (can.kill) tools += `<button class="danger" data-act="kill">${row && (row.kind == "machine" || row.kind == "broken") ? "kill all" : row && row.kind == "lease" ? "release" : "kill"}<kbd>k</kbd></button>`;
+  if (can.withdraw) tools += `<button class="danger" data-act="withdraw" title="authorized to no one any more">withdraw</button>`;
+  if (can.authorize) tools += `<button data-act="authorize" title="pages that ask for it start this command there: shown in full before">authorize to pages</button>`;
   if (can.watch) tools += `<button data-act="watch">${can.watch}<kbd>a</kbd></button>`;
   for (const how of can.caches || []) tools += `<button class="danger" data-act="cache_remove" data-how="${how}">${CACHE_ACTS[how][0]}<kbd>${CACHE_ACTS[how][1]}</kbd></button>`;
   if (can.hold) tools += `<button data-act="cache_hold">this machine holds it<kbd>h</kbd></button>`;

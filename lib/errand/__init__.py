@@ -41,7 +41,7 @@ default_run: list | None = None
 _LAZY = {
     "main": "launcher",
     **dict.fromkeys( ( "configure", "Env", "envs", "providers" ), "config" ),
-    **dict.fromkeys( ( "services", "Service", "http_json", "sources", "dev_sources", "Checkout" ), "serve" ),
+    **dict.fromkeys( ( "serve", "http", "Server", "ServeError" ), "servers" ),
     **dict.fromkeys( ( "runners", "Runner", "Errand", "Pytest", "Catch2", "Cargo", "Python", "Executable" ), "runner" ),
     **dict.fromkeys( ( "Vars", "Venv", "Micromamba", "Conda", "Uv", "Nix", "Guix", "Module", "Apptainer", "Docker", "Podman",
                        "Ssh", "Slurm", "Mpi", "Preload", "Missing", "Windows", "WindowsBox" ), "layers" ),
@@ -60,10 +60,17 @@ if TYPE_CHECKING:                # the same names, for whoever cannot follow `__
         Windows, WindowsBox,
     )
     from .runner import Cargo, Catch2, Errand, Executable, Pytest, Python, Runner, runners
-    from .serve import Checkout, Service, dev_sources, http_json, services, sources
+    from .servers import ServeError, Server, http, serve
+
+
+# What a server is comes with the request ( ADR 0040 )
+_GONE = { **dict.fromkeys( ( "services", "Service", "http_json" ), "a server is asked for in full: errand.serve( … ), or errand serve [options] -- COMMAND" ),
+          "sources": "errand serve source URL", **dict.fromkeys( ( "dev_sources", "Checkout" ), "errand serve dev REPOSITORY PATH" ) }
 
 
 def __getattr__( name ):
+    if name in _GONE:
+        raise AttributeError( f"errand.{name} is not read any more: {_GONE[ name ]}" )
     if name in _LAZY:
         import importlib
         return getattr( importlib.import_module( f"errand.{_LAZY[ name ]}" ), name )

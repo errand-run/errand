@@ -20,6 +20,9 @@ import (
 
 func main() {
 	args := os.Args[1:]
+	if len(args) == 4 && args[0] == "serve" && args[1] == "kept-lease" { // what the system starts for a port it keeps ( --always )
+		os.Exit(agent.KeptLease(args[2], args[3]))
+	}
 	if len(args) == 0 || strings.HasPrefix(args[0], "-") || isVerb(args[0]) || typedVerb(args[0]) {
 		words, answered := asTyped(args)
 		if answered {
@@ -52,8 +55,6 @@ func main() {
 		os.Exit(command.AgainMain(args[1:]))
 	case len(args) >= 1 && args[0] == "quit":
 		os.Exit(command.QuitMain(args[1:]))
-	case len(args) >= 3 && args[0] == "kept-forward":
-		os.Exit(command.KeptForwardMain(args[1:]))
 	case len(args) == 1 && args[0] == "peek":
 		os.Exit(agent.PeekMain())
 	case len(args) >= 1 && args[0] == "there":

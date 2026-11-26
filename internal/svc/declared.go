@@ -1,22 +1,16 @@
 package svc
 
 import (
-	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"os/exec"
-	"path/filepath"
+	"net"
 	"regexp"
 	"strconv"
 	"strings"
-	"sync"
 
 	"github.com/errand-run/errand/internal/kit"
 	"github.com/errand-run/errand/internal/project"
 	"github.com/errand-run/errand/internal/queue"
-	"github.com/errand-run/errand/lib"
 )
 
 // ServicePort is one port of a service, and its two sides; 0: errand chooses.
@@ -34,16 +28,22 @@ type ServiceSpec struct {
 	Needs     map[string]any    `json:"needs"`
 	Exclusive bool              `json:"exclusive"`
 	Label     string            `json:"label"`
-	Busy      any               `json:"busy"` // nothing, a line of shell, { "http_json": PATH }, { "function": true }
+	Busy      any               `json:"busy"` // nothing, a line of shell, or { "http": PATH, "field": NAME, "port": NAME }
 	Ready     any               `json:"ready"`
 	Idle      float64           `json:"idle"`
 	Grace     float64           `json:"grace"`
 	Ports     []ServicePort     `json:"ports"`
 	Others    bool              `json:"others"`
+	Listen    string            `json:"listen,omitempty"`   // of the port: the address it is listened on, beside 127.0.0.1's
+	Always    bool              `json:"always,omitempty"`   // of the port: the system listens on it in errand's stead
+	HoldEnd   float64           `json:"hold_end,omitempty"` // of the port: a client's end, passed on once the server was silent that long
 	Cwd       string            `json:"cwd"`
+	On        []project.Layer   `json:"on,omitempty"` // where it runs: a machine, and layers, in full
 	Source    string            `json:"source"`
-	From      string            `json:"from,omitempty"` // the directory its declaration was read around
 	Provider  any               `json:"provider,omitempty"`
+	Keep      float64           `json:"keep,omitempty"`       // how long its ports stay after they were last used; 0: a day
+	Version   string            `json:"version,omitempty"`    // raised when something errand does not see has changed
+	VersionOf []string          `json:"version_of,omitempty"` // files whose contents make another server
 }
 
 func (s ServiceSpec) Asks() queue.Needs {
@@ -132,17 +132,35 @@ func (s ServiceSpec) Check() error {
 			seen[n] = true
 		}
 	}
+	if s.Listen != "" && net.ParseIP(s.Listen) == nil {
+		return fmt.Errorf("listen: an address of this machine, as numbers ( 0.0.0.0, 100.64.1.2; got %q )", s.Listen)
+	}
 	texts := append([]string{}, s.Command...)
 	for _, v := range s.Env {
 		texts = append(texts, v)
 	}
-	if b, ok := s.Busy.(string); ok {
-		texts = append(texts, b)
+	for _, p := range []any{s.Busy, s.Ready} {
+		if line, ok := p.(string); ok {
+			texts = append(texts, line)
+		}
 	}
 	for _, t := range texts {
 		if _, err := FillPorts(t, dummy); err != nil {
 			return err
 		}
+	}
+	for _, p := range []any{s.Busy, s.Ready} {
+		_, h, err := ProbeOf(p)
+		if err != nil {
+			return err
+		}
+		if h != nil && h.Port != "" && dummy[h.Port] == 0 {
+			return fmt.Errorf("a probe: no port %q", h.Port)
+		}
+	}
+	_, _, err := s.Where()
+	if err != nil {
+		return err
 	}
 	return nil
 }
@@ -181,160 +199,4 @@ func ParsePort(text string) (ServicePort, error) {
 		*side.into = n
 	}
 	return p, nil
-}
-
-// ── what is declared on this machine ─────────────────────────────────────────
-
-// Declarations is what errand's Python said is declared on this machine.
-type Declarations struct {
-	Services map[string]ServiceSpec
-	Sources  []string
-	Dev      map[string]devSource
-	Said     []string
-	Python   []string // what reads it, for a probe that is a function
-	Environ  []string
-}
-
-type devSource struct {
-	Path string            `json:"path"`
-	Env  string            `json:"env"`
-	Envs map[string]string `json:"envs"`
-}
-
-// servicePython: the Python that reads declarations on this machine, and its surroundings, where errand's package is
-func servicePython(environ []string) (string, []string, error) {
-	if len(environ) == 0 {
-		environ = os.Environ()
-	}
-	env, err := lib.With(environ)
-	if err != nil {
-		return "", nil, err
-	}
-	for _, name := range []string{project.Python(environ), "python"} {
-		if path, err := kit.LookIn(name, env, "."); err == nil {
-			return path, env, nil
-		}
-	}
-	return "", env, errors.New("there is no Python here to read the services' declarations with")
-}
-
-func servicesFiles(environ []string) []string {
-	if len(environ) == 0 {
-		environ = os.Environ()
-	}
-	base, _ := kit.EnvOf(environ, "XDG_CONFIG_HOME")
-	if base == "" {
-		home, _ := kit.EnvOf(environ, "HOME")
-		if home == "" {
-			home, _ = os.UserHomeDir()
-		}
-		base = filepath.Join(home, ".config")
-	}
-	return []string{filepath.Join(base, "errand", "services.py"), filepath.Join(base, "errand", "services-installed.json")}
-}
-
-var declaredKept struct {
-	sync.Mutex
-	got map[string]Declarations
-}
-
-// DeclaredServices: what is declared on this machine, around `cwd` -- the user's file, what was installed ( the user's file
-// wins ), the project's files. A file that does not load hides nothing of the others: it is said.
-func DeclaredServices(cwd string, environ []string) (Declarations, error) {
-	if len(environ) == 0 { // asked from another machine: this agent's surroundings
-		environ = os.Environ()
-	}
-	got := Declarations{Services: map[string]ServiceSpec{}, Environ: environ}
-	var mark strings.Builder
-	mark.WriteString(cwd)
-	files := servicesFiles(environ)[:1]
-	if root, declared := project.FindRoot(cwd); declared {
-		here, _ := filepath.Glob(filepath.Join(root, "errand-*.py"))
-		files = append(files, here...)
-	}
-	found := false
-	for _, f := range files {
-		if st, err := os.Stat(f); err == nil {
-			found = true
-			fmt.Fprintf(&mark, "|%s %d %d", f, st.Size(), st.ModTime().UnixNano())
-		}
-	}
-	if found { // else no Python is asked anything
-		declaredKept.Lock()
-		kept, ok := declaredKept.got[mark.String()]
-		if !ok {
-			var err error
-			if kept, err = readServices(cwd, environ); err != nil {
-				kept = Declarations{Said: []string{err.Error()}, Environ: environ}
-			} else {
-				if len(declaredKept.got) > 32 || declaredKept.got == nil {
-					declaredKept.got = map[string]Declarations{}
-				}
-				declaredKept.got[mark.String()] = kept
-			}
-		}
-		declaredKept.Unlock()
-		got = kept
-		got.Services = map[string]ServiceSpec{}
-		for k, s := range kept.Services {
-			got.Services[k] = s
-		}
-	}
-	for k, d := range InstalledHere(environ) {
-		if _, said := got.Services[k]; said {
-			continue
-		}
-		spec, err := specOf(k, d)
-		if err != nil {
-			got.Said = append(got.Said, fmt.Sprintf("%s: %v", k, err))
-			continue
-		}
-		spec.From = cwd
-		got.Services[k] = spec
-	}
-	return got, nil
-}
-
-// readServices: the files that declare services, read by errand's Python
-func readServices(cwd string, environ []string) (Declarations, error) {
-	interpreter, env, err := servicePython(environ)
-	if err != nil {
-		return Declarations{}, err
-	}
-	cmd := exec.Command(interpreter, "-m", "errand.declared", "--services", cwd)
-	cmd.Env = env
-	if kit.IsDir(cwd) {
-		cmd.Dir = cwd
-	}
-	var said bytes.Buffer
-	cmd.Stderr = &said
-	out, err := cmd.Output()
-	if err != nil {
-		return Declarations{}, fmt.Errorf("the services' declarations could not be read:\n%s", kit.EndOf(said.String(), 1500))
-	}
-	var doc struct {
-		Services map[string]struct {
-			ServiceSpec
-			Ports [][]any `json:"ports"`
-		} `json:"services"`
-		Sources []string             `json:"sources"`
-		Dev     map[string]devSource `json:"dev"`
-		Said    []string             `json:"said"`
-	}
-	if err := json.Unmarshal(out, &doc); err != nil {
-		return Declarations{}, fmt.Errorf("the services' declarations cannot be read: %v", err)
-	}
-	got := Declarations{Services: map[string]ServiceSpec{}, Sources: doc.Sources, Dev: doc.Dev, Said: doc.Said, Python: []string{interpreter}, Environ: env}
-	for name, s := range doc.Services {
-		spec := s.ServiceSpec
-		spec.Name, spec.From = name, cwd
-		spec.Ports = nil
-		for _, p := range s.Ports {
-			if len(p) == 3 {
-				spec.Ports = append(spec.Ports, ServicePort{Name: kit.Text(p[0]), Announced: int(kit.Num(p[1], 0)), Server: int(kit.Num(p[2], 0))})
-			}
-		}
-		got.Services[name] = spec
-	}
-	return got, nil
 }

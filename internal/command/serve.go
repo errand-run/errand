@@ -4,17 +4,15 @@ package command
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
-	"net"
 	"path/filepath"
-	"regexp"
 	"strings"
-	"sync"
 	"time"
 
-	"github.com/errand-run/errand/internal/agent"
 	"github.com/errand-run/errand/internal/caches"
 	"github.com/errand-run/errand/internal/kit"
+	"github.com/errand-run/errand/internal/project"
 	"github.com/errand-run/errand/internal/reach"
 	"github.com/errand-run/errand/internal/svc"
 )
@@ -22,10 +20,12 @@ import (
 type serveOptions struct {
 	spec                       svc.ServiceSpec
 	name                       string
-	ensure, follow, url, keep  bool
+	ensure, follow, url        bool
 	off, yes, versions, dryRun bool
+	wait, json, now            bool
 	urlPort, host, env, root   string
-	forKey, into, index        string
+	request                    string // "-": as JSON, on the standard input
+	forKey, into, index, to    string
 	sources, paths             []string
 	unused                     *float64
 	port                       []string
@@ -77,12 +77,21 @@ func parseServe(args []string) (serveOptions, error) {
 						o.spec.Grace = s
 					default:
 						o.holdEnd = time.Duration(s * float64(time.Second))
+						o.spec.HoldEnd = s
 					}
 				}
 			}
-		case name == "--busy-if":
+		case name == "--busy-if" || name == "--ready-if" || name == "--busy-http" || name == "--ready-http":
 			if v, err = take(); err == nil {
-				o.spec.Busy = v
+				var probe any = v
+				if strings.HasSuffix(name, "-http") {
+					probe, err = svc.ParseHTTPProbe(v)
+				}
+				if strings.HasPrefix(name, "--busy") {
+					o.spec.Busy = probe
+				} else {
+					o.spec.Ready = probe
+				}
 			}
 		case name == "--port":
 			if v, err = take(); err == nil {
@@ -90,14 +99,47 @@ func parseServe(args []string) (serveOptions, error) {
 			}
 		case a == "--others":
 			o.spec.Others = true
+		case name == "--listen":
+			o.spec.Listen, err = take()
+		case a == "--always":
+			o.spec.Always = true
+		case name == "--keep":
+			if v, err = take(); err == nil {
+				o.spec.Keep, err = svc.Duration(v)
+			}
+		case name == "--var":
+			if v, err = take(); err == nil {
+				k, value, ok := strings.Cut(v, "=")
+				if !ok || k == "" {
+					err = fmt.Errorf("--var NAME=VALUE ( got %q )", v)
+				}
+				o.spec.Env[k] = value
+			}
+		case name == "--cwd":
+			o.spec.Cwd, err = take()
+		case name == "--server-version":
+			o.spec.Version, err = take()
+		case name == "--version-of":
+			if v, err = take(); err == nil {
+				o.spec.VersionOf = append(o.spec.VersionOf, v)
+			}
+		case a == "--wait":
+			o.wait = true
+		case name == "--spec":
+			o.request, err = take()
+			if err == nil && o.request != "-" {
+				err = fmt.Errorf("--spec -: the request is read from the standard input")
+			}
+		case a == "--json":
+			o.json = true
+		case a == "--now":
+			o.now = true
 		case a == "--ensure":
 			o.ensure = true
 		case a == "-f" || a == "--foreground":
 			o.follow = true
 		case a == "--yes":
 			o.yes = true
-		case a == "--keep":
-			o.keep = true
 		case a == "--off":
 			o.off = true
 		case a == "--versions":
@@ -126,6 +168,8 @@ func parseServe(args []string) (serveOptions, error) {
 			o.root, err = take()
 		case name == "--for":
 			o.forKey, err = take()
+		case name == "--to":
+			o.to, err = take()
 		case name == "--into":
 			o.into, err = take()
 		case name == "--index":
@@ -185,11 +229,31 @@ func machineFor(t *reach.Term, host, env, root string) (*reach.HostSpec, error) 
 	return &reach.HostSpec{Host: host}, nil
 }
 
+// onWhat: where a server is to run, as data -- a machine by its name, or an environment of the project, in full
+func onWhat(t *reach.Term, o serveOptions) ([]project.Layer, error) {
+	if o.env != "" {
+		doc, err := declared(t, o.root)
+		if err != nil {
+			return nil, err
+		}
+		_, e, err := doc.Env(o.env)
+		return e.Stack, err
+	}
+	h, err := machineFor(t, o.host, "", o.root)
+	if err != nil || h == nil {
+		return nil, err
+	}
+	return []project.Layer{h.Layer()}, nil
+}
+
 func statusLine(st map[string]any) string {
 	where := ""
 	ports := caches.ListOf(st["ports"])
 	for _, x := range ports {
 		p, _ := x.(map[string]any)
+		if kit.Num(p["port"], 0) == 0 {
+			continue
+		}
 		one := fmt.Sprintf("127.0.0.1:%.0f", kit.Num(p["port"], 0))
 		if len(ports) > 1 {
 			one = kit.Text(p["name"]) + "=" + one
@@ -200,7 +264,11 @@ func statusLine(st map[string]any) string {
 	if n := kit.Num(st["waiting"], 0); n > 0 {
 		line += fmt.Sprintf("  %.0f connection%s waiting", n, reach.Plural(int(n)))
 	}
-	return strings.TrimRight(line, " ")
+	line = strings.TrimRight(line, " ")
+	if until := kit.Num(st["until"], 0); until > 0 {
+		line += "  kept " + reach.Span(until-kit.Seconds(time.Now()))
+	}
+	return line
 }
 
 func serveMain(t *reach.Term, args []string) int {
@@ -209,11 +277,14 @@ func serveMain(t *reach.Term, args []string) int {
 		t.Sayln("errand serve:", err)
 		return 2
 	}
-	if len(o.words) > 1 && len(o.command) > 0 && o.words[0] == "install" || len(o.words) == 1 && len(o.command) > 0 && o.words[0] == "probe" {
+	if len(o.words) == 1 && len(o.command) > 0 && o.words[0] == "probe" {
 		return pageServicesMain(t, o.words[0], o, o.words[1:])
 	}
-	if o.holdEnd > 0 && (len(o.words) == 0 || o.words[0] != "connect" || len(o.command) > 0) {
-		t.Sayln("errand serve: --hold-end is for `errand serve connect`: each connection says it for itself, the server is not concerned")
+	if len(o.words) > 0 && o.words[0] == "authorize" {
+		return serveAuthorize(t, o, o.words[1:])
+	}
+	if o.holdEnd > 0 && len(o.command) == 0 && o.request == "" && (len(o.words) == 0 || o.words[0] != "connect") {
+		t.Sayln("errand serve: --hold-end is of a port ( errand serve --hold-end 2s … -- COMMAND ) or of a connection ( errand serve connect --hold-end 2s HASH )")
 		return 2
 	}
 	if len(o.words) > 0 && len(o.command) == 0 {
@@ -225,110 +296,189 @@ func serveMain(t *reach.Term, args []string) int {
 			return serveList(t, o)
 		case "stop":
 			return serveStop(t, o, rest)
+		case "release":
+			return serveRelease(t, o, rest)
 		case "connect":
 			return serveConnect(t, o, rest)
 		case "log":
 			return serveLog(t, o, rest)
-		case "forward":
-			return serveForward(t, o, rest)
-		case "look", "fetch", "install", "probe":
+		case "dev", "source":
+			return serveConfig(t, o, verb, rest)
+		case "authorized", "withdraw":
+			return serveAuthorized(t, o, verb, rest)
+		case "install":
+			t.Sayln("errand serve install: gone; a page's service is authorized: errand serve authorize --to pages NAME#VERSION [-- WORDS]")
+			return 2
+		case "look", "fetch", "probe":
 			return pageServicesMain(t, verb, o, rest)
 		case "pin", "unpin", "prune":
 			return versionsMain(t, o)
 		}
 	}
-	if len(o.words) == 0 && len(o.command) == 0 {
+	if len(o.words) == 0 && len(o.command) == 0 && o.request == "" {
 		return serveList(t, o)
 	}
 	if len(o.words) > 1 {
 		t.Sayf("errand serve: %s: one service at a time; a command goes after `--`", strings.Join(o.words, " "))
 		return 2
 	}
-	req := map[string]any{"op": "service", "cwd": t.Cwd, "environ": t.Environ, "stay": o.follow}
-	if len(o.command) > 0 {
-		spec := o.spec
-		spec.Command = o.command
+	failed := func(err error, code int) int {
+		why := strings.TrimPrefix(err.Error(), "this machine's agent: ")
+		if o.json {
+			b, _ := json.Marshal(map[string]any{"error": why})
+			t.Println(string(b))
+		} else {
+			t.Sayln("errand serve:", why)
+		}
+		return code
+	}
+	req := map[string]any{"op": "lease", "cwd": t.Cwd, "environ": t.Environ}
+	var h *reach.HostSpec
+	switch {
+	case o.request != "" || len(o.command) > 0:
+		spec, err := askedInFull(t, o)
+		if err == nil {
+			err = spec.Check()
+		}
+		if err != nil {
+			return failed(err, 2)
+		}
+		if len(spec.On) > 0 && spec.On[0].Type() == "Ssh" {
+			there := reach.HostOf(spec.On[0])
+			h = &there
+		}
+		req["spec"], req["name"] = spec, spec.Name
+	case o.host != "" || o.env != "":
+		return failed(errors.New("a server of another machine is asked for in full: errand serve --on HOST [options] -- COMMAND"), 2)
+	default:
+		req["name"] = o.words[0]
+	}
+	l, err := reach.LinkTo(t, nil)
+	if err != nil {
+		return failed(err, 1)
+	}
+	got, err := l.Ask(req)
+	if err != nil {
+		return failed(err, 1)
+	}
+	lease, _ := got["lease"].(map[string]any)
+	name := kit.Text(lease["label"])
+	urls, ports, first := map[string]any{}, map[string]any{}, ""
+	where := ""
+	for i, x := range caches.ListOf(lease["ports"]) {
+		p, _ := x.(map[string]any)
+		url := fmt.Sprintf("http://%s:%.0f", kit.Text(lease["address"]), kit.Num(p["port"], 0))
+		urls[kit.Text(p["name"])], ports[kit.Text(p["name"])] = url, p["port"]
+		one := url
+		if len(caches.ListOf(lease["ports"])) > 1 {
+			one = kit.Text(p["name"]) + " " + url
+		}
+		where += "  " + one
+		if i == 0 {
+			first = url
+		}
+	}
+	if o.follow && !o.json { // said now: it is where it will answer
+		t.Printf("%s%s\n", name, where)
+	}
+	if o.wait || o.ensure || o.follow {
+		req["op"], req["stay"] = "service", o.follow
+		ask := func(req map[string]any) map[string]any { // ... the agent of the machine it runs on
+			if h == nil {
+				return req
+			}
+			return map[string]any{"op": "at", "host": h, "req": req, "environ": t.Environ}
+		}
+		if h != nil {
+			_, there, _ := req["spec"].(svc.ServiceSpec).Where()
+			req["spec"] = there
+		}
+		st, code := ensureService(t, l, ask, req, o)
+		if o.follow {
+			_, _ = l.Ask(map[string]any{"op": "lease_release", "id": lease["id"]})
+		}
+		if code != 0 {
+			if o.json {
+				b, _ := json.Marshal(map[string]any{"error": kit.Text(st["detail"])})
+				t.Println(string(b))
+			}
+			return code
+		}
+		if o.ensure || o.follow {
+			return 0
+		}
+		lease["state"] = st["state"]
+	}
+	switch {
+	case o.json:
+		delete(lease, "ports")
+		lease["url"], lease["urls"], lease["ports"] = first, urls, ports
+		b, _ := json.Marshal(lease)
+		t.Println(string(b))
+	case o.url:
+		if o.urlPort != "" {
+			first = kit.Text(urls[o.urlPort])
+		}
+		if first == "" {
+			t.Sayf("errand serve: %s: no port %q", name, o.urlPort)
+			return 1
+		}
+		t.Println(first)
+	default:
+		said := kit.Text(lease["state"])
+		if why := kit.Text(lease["why"]); why != "" {
+			said += ": " + why
+		}
+		t.Printf("%s%s  ( %s, kept %s )\n", name, where, said, reach.Span(kit.Num(lease["until"], 0)-kit.Seconds(time.Now())))
+	}
+	return 0
+}
+
+// askedInFull: what is asked for, by the options and the command, or as JSON
+func askedInFull(t *reach.Term, o serveOptions) (svc.ServiceSpec, error) {
+	spec := o.spec
+	if o.request != "" {
+		var data []byte
+		for more := true; more; {
+			var b []byte
+			select {
+			case b, more = <-t.Stdin:
+				data = append(data, b...)
+			case <-t.Gone:
+				return spec, errors.New("whoever asked went")
+			}
+		}
+		var err error
+		if spec, o.host, err = svc.ParseRequest(data); err != nil {
+			return spec, err
+		}
+	} else {
+		spec.Command, spec.Name = o.command, o.name
 		for _, p := range o.port {
 			one, err := svc.ParsePort(p)
 			if err != nil {
-				t.Sayln("errand serve:", err)
-				return 2
+				return spec, err
 			}
 			spec.Ports = append(spec.Ports, one)
 		}
-		if len(spec.Ports) == 0 {
-			spec.Ports = []svc.ServicePort{{Name: "port"}}
-		}
-		spec.Name = o.name
 		if spec.Name == "" && len(o.words) == 1 {
 			spec.Name = o.words[0]
 		}
-		if spec.Name == "" {
-			word := spec.Label
-			if word == "" {
-				for _, w := range o.command { // ( `env A=b ollama serve` is ollama )
-					if filepath.Base(w) != "env" && !strings.Contains(w, "=") {
-						word = filepath.Base(w)
-						break
-					}
-				}
-			}
-			spec.Name = strings.Trim(regexp.MustCompile(`[^A-Za-z0-9_.-]+`).ReplaceAllString(word, "-"), "-.")
+	}
+	spec.Complete()
+	if spec.On == nil {
+		var err error
+		if spec.On, err = onWhat(t, o); err != nil {
+			return spec, err
 		}
-		if err := spec.Check(); err != nil {
-			t.Sayln("errand serve:", err)
-			return 2
-		}
-		req["spec"], req["name"] = spec, spec.Name
-	} else {
-		req["name"] = o.words[0]
 	}
-	h, err := machineFor(t, o.host, o.env, o.root)
-	if err != nil {
-		t.Sayln("errand serve:", err)
-		return 1
-	}
-	if h != nil {
-		req["cwd"], req["environ"] = "", nil
-	}
-	l, err := reach.LinkTo(t, h)
-	if err != nil {
-		t.Sayln("errand serve:", err)
-		return 1
-	}
-	st, code := ensureService(t, l, req, o)
-	if code != 0 || o.ensure {
-		return code
-	}
-	ports := caches.ListOf(st["ports"])
-	if o.url {
-		for i, x := range ports {
-			p, _ := x.(map[string]any)
-			if (o.urlPort == "" && i == 0) || kit.Text(p["name"]) == o.urlPort {
-				t.Printf("http://127.0.0.1:%.0f\n", kit.Num(p["port"], 0))
-				return 0
-			}
-		}
-		t.Sayf("errand serve: %s: no port %q", kit.Text(st["name"]), o.urlPort)
-		return 1
-	}
-	where := ""
-	for _, x := range ports {
-		p, _ := x.(map[string]any)
-		one := fmt.Sprintf("http://127.0.0.1:%.0f", kit.Num(p["port"], 0))
-		if len(ports) > 1 {
-			one = kit.Text(p["name"]) + " " + one
-		}
-		where += "  " + one
-	}
-	t.Printf("%s%s  ( %s )\n", kit.Text(st["name"]), where, kit.Text(st["state"]))
-	return 0
+	return spec, nil
 }
 
 // ensureService: a service asked for, and said while it comes -> how it is, once it answers. `-f`: stays until it stops,
 // and Ctrl-C stops it.
-func ensureService(t *reach.Term, l *reach.Link, req map[string]any, o serveOptions) (map[string]any, int) {
-	c := l.Open(req)
+func ensureService(t *reach.Term, l *reach.Link, ask func(map[string]any) map[string]any, req map[string]any, o serveOptions) (map[string]any, int) {
+	c := l.Open(ask(req))
 	defer c.Close()
 	got, err := c.Reply()
 	if err != nil {
@@ -355,7 +505,7 @@ func ensureService(t *reach.Term, l *reach.Link, req map[string]any, o serveOpti
 		select {
 		case <-t.Sigs:
 			if o.follow {
-				_, _ = l.Ask(map[string]any{"op": "service_stop", "name": req["name"]})
+				_, _ = l.Ask(ask(map[string]any{"op": "service_stop", "key": st["key"]}))
 			}
 			return st, 130
 		case <-t.Gone:
@@ -372,7 +522,7 @@ func ensureService(t *reach.Term, l *reach.Link, req map[string]any, o serveOpti
 				if s, ok := said["status"].(map[string]any); ok {
 					st = s
 					line := kit.Text(st["state"]) + " " + kit.Text(st["detail"])
-					if line != last && !o.url && !o.ensure && (o.follow || kit.Text(st["state"]) == "waiting") {
+					if line != last && !o.url && !o.ensure && !o.json && (o.follow || kit.Text(st["state"]) == "waiting") {
 						t.Say(statusLine(st))
 					}
 					last = line
@@ -416,10 +566,18 @@ func serveList(t *reach.Term, o serveOptions) int {
 	}
 	all := caches.ListOf(got["services"])
 	if len(all) == 0 {
-		t.Println("  no service is declared here ( ~/.config/errand/services.py ), none runs")
+		t.Println("  no server runs here, no port is kept for one")
+	}
+	named := map[string]int{}
+	for _, x := range all {
+		st, _ := x.(map[string]any)
+		named[kit.Text(st["name"])]++
 	}
 	for _, x := range all {
 		st, _ := x.(map[string]any)
+		if hash := kit.Text(st["config"]); named[kit.Text(st["name"])] > 1 && hash != "" {
+			st["name"] = kit.Text(st["name"]) + "~" + hash[:min(4, len(hash))]
+		}
 		t.Println(statusLine(st))
 	}
 	return 0
@@ -447,7 +605,9 @@ func serveStop(t *reach.Term, o serveOptions, names []string) int {
 		case err != nil:
 			t.Sayln("errand serve:", err)
 			code = 1
-		case got["stopped"] == true:
+		case kit.Num(got["stopped"], 0) > 1:
+			t.Printf("  %s  stopped ( %.0f servers )\n", n, kit.Num(got["stopped"], 0))
+		case kit.Num(got["stopped"], 0) > 0:
 			t.Printf("  %s  stopped\n", n)
 		default:
 			t.Printf("  %s  it does not run\n", n)
@@ -456,59 +616,10 @@ func serveStop(t *reach.Term, o serveOptions, names []string) int {
 	return code
 }
 
-func serveLog(t *reach.Term, o serveOptions, names []string) int {
-	if len(names) != 1 {
-		t.Sayln("errand serve log NAME")
-		return 2
-	}
-	t.Println(filepath.Join(kit.LocalCache(), "serving", names[0], "keeper.log"))
-	return 0
-}
-
-// exchange is what was said last on a connection: whether the server owes an answer, and since when it is silent.
-type exchange struct {
-	mu   sync.Mutex
-	owed bool
-	last time.Time
-}
-
-func (e *exchange) asked() {
-	e.mu.Lock()
-	e.owed = true
-	e.mu.Unlock()
-}
-
-func (e *exchange) answered() {
-	e.mu.Lock()
-	e.owed, e.last = false, time.Now()
-	e.mu.Unlock()
-}
-
-// over: waits until the server, which may think as long as it wants, has answered and been silent for `quiet`; false when
-// the connection ended before
-func (e *exchange) over(quiet time.Duration, ended <-chan struct{}) bool {
-	for {
-		e.mu.Lock()
-		owed, left := e.owed, quiet-time.Since(e.last)
-		e.mu.Unlock()
-		switch {
-		case owed:
-			left = 100 * time.Millisecond
-		case left <= 0:
-			return true
-		}
-		select {
-		case <-time.After(min(left, 100*time.Millisecond)):
-		case <-ended:
-			return false
-		}
-	}
-}
-
-// serveConnect: this command's standard streams, relayed to a service
-func serveConnect(t *reach.Term, o serveOptions, words []string) int {
-	if len(words) == 0 || len(words) > 2 {
-		t.Sayln("errand serve connect NAME [PORT]")
+// serveRelease: leases given back -- their ports are closed, and their servers end when nobody uses them; `--now`: at once
+func serveRelease(t *reach.Term, o serveOptions, names []string) int {
+	if len(names) == 0 {
+		t.Sayln("errand serve release NAME [--now]")
 		return 2
 	}
 	h, err := machineFor(t, o.host, o.env, o.root)
@@ -521,7 +632,57 @@ func serveConnect(t *reach.Term, o serveOptions, words []string) int {
 		t.Sayln("errand serve:", err)
 		return 1
 	}
-	req := map[string]any{"op": "service_connect", "name": words[0], "cwd": t.Cwd, "environ": t.Environ}
+	code := 0
+	for _, n := range names {
+		got, err := l.Ask(map[string]any{"op": "lease_release", "name": n})
+		if err == nil && o.now {
+			_, err = l.Ask(map[string]any{"op": "service_stop", "name": n})
+		}
+		switch {
+		case err != nil:
+			t.Sayln("errand serve:", err)
+			code = 1
+		case kit.Num(got["released"], 0) > 0:
+			t.Printf("  %s  released\n", n)
+		default:
+			t.Printf("  %s  it has no port\n", n)
+		}
+	}
+	return code
+}
+
+func serveLog(t *reach.Term, o serveOptions, names []string) int {
+	if len(names) != 1 {
+		t.Sayln("errand serve log NAME")
+		return 2
+	}
+	for _, d := range svc.ServingDirs() {
+		if label, hash, _ := strings.Cut(names[0], "~"); label == d.Label && strings.HasPrefix(d.Key, hash) {
+			t.Println(filepath.Join(d.Dir, "keeper.log"))
+			return 0
+		}
+	}
+	t.Sayln("errand serve log: no server of that name ran here:", names[0])
+	return 1
+}
+
+// serveConnect: this command's standard streams, relayed to a service
+func serveConnect(t *reach.Term, o serveOptions, words []string) int {
+	if len(words) == 0 || len(words) > 2 || !isHash(words[0]) {
+		t.Sayln(errNoHash.Error())
+		return 2
+	}
+	h, err := machineFor(t, o.host, o.env, o.root)
+	if err != nil {
+		t.Sayln("errand serve:", err)
+		return 1
+	}
+	l, err := reach.LinkTo(t, h)
+	if err != nil {
+		t.Sayln("errand serve:", err)
+		return 1
+	}
+	req := map[string]any{"op": "service_connect", "hash": words[0], "cwd": t.Cwd, "environ": t.Environ}
 	if len(words) == 2 {
 		req["port"] = words[1]
 	}
@@ -534,19 +695,19 @@ func serveConnect(t *reach.Term, o serveOptions, words []string) int {
 	t.Event(map[string]any{"reader": true}) // nothing may be written for a long time: that nobody reads any more is looked at
 	over := make(chan struct{})
 	defer close(over)
-	answers := &exchange{}
+	answers := &kit.Exchange{}
 	go func() {
 		for {
 			select {
 			case data, more := <-t.Stdin:
 				if !more { // it sends no more; what the service answers is still relayed, until the service closes
-					if o.holdEnd > 0 && !answers.over(o.holdEnd, over) {
+					if o.holdEnd > 0 && !answers.Over(o.holdEnd, over) {
 						return
 					}
 					_ = c.Send(kit.EOF, nil)
 					return
 				}
-				answers.asked()
+				answers.Asked()
 				_ = c.Send(kit.IN, data)
 			case <-over:
 				return
@@ -579,7 +740,7 @@ func serveConnect(t *reach.Term, o serveOptions, words []string) int {
 			}
 			switch m.Kind {
 			case kit.OUT:
-				answers.answered()
+				answers.Answered()
 				t.Output(kit.OUT, m.Payload)
 			case kit.EXIT:
 				var end struct{ Code int }
@@ -592,113 +753,4 @@ func serveConnect(t *reach.Term, o serveOptions, words []string) int {
 			return 130
 		}
 	}
-}
-
-// forwardTo: every connection to a listening socket, relayed to a service where `reach` leads -- one channel per
-// connection, through the link errand already holds. The first starts the service there.
-func forwardTo(lis net.Listener, reach func() (*reach.Link, error), name, port string, said func(string)) (conns func() int) {
-	var mu sync.Mutex
-	open := 0
-	go func() {
-		for {
-			conn, err := lis.Accept()
-			if err != nil {
-				return
-			}
-			if !agent.OwnConnection(conn) {
-				conn.Close()
-				continue
-			}
-			go func() {
-				defer conn.Close()
-				mu.Lock()
-				open++
-				mu.Unlock()
-				defer func() {
-					mu.Lock()
-					open--
-					mu.Unlock()
-				}()
-				l, err := reach()
-				if err != nil {
-					said(err.Error())
-					return
-				}
-				c := l.Open(map[string]any{"op": "service_connect", "name": name, "port": port, "cwd": ""})
-				defer c.Close()
-				if _, err := c.Reply(); err != nil {
-					said(err.Error())
-					return
-				}
-				go func() {
-					buf := make([]byte, 64<<10)
-					for {
-						n, err := conn.Read(buf)
-						if n > 0 && c.Send(kit.IN, append([]byte{}, buf[:n]...)) != nil {
-							return
-						}
-						if err != nil {
-							_ = c.Send(kit.EOF, nil)
-							return
-						}
-					}
-				}()
-				for {
-					kind, payload, err := c.Recv()
-					if err != nil || kind == kit.EXIT {
-						return
-					}
-					if kind == kit.OUT {
-						if _, err := conn.Write(payload); err != nil {
-							return
-						}
-					}
-				}
-			}()
-		}
-	}()
-	return func() int { mu.Lock(); defer mu.Unlock(); return open }
-}
-
-func serveForward(t *reach.Term, o serveOptions, words []string) int {
-	if len(words) == 0 || len(words) > 2 || (o.host == "" && o.env == "") {
-		t.Sayln("errand serve forward NAME [PORT] --host H | --env E [--port N] [--keep [--off]]")
-		return 2
-	}
-	h, err := machineFor(t, o.host, o.env, o.root)
-	if err != nil {
-		t.Sayln("errand serve:", err)
-		return 1
-	}
-	if h == nil {
-		t.Sayln("errand serve forward: that is this machine: its services are reached on it")
-		return 2
-	}
-	want, port := 0, ""
-	if len(o.port) > 0 {
-		_, _ = fmt.Sscan(o.port[0], &want)
-	}
-	if len(words) == 2 {
-		port = words[1]
-	}
-	if o.keep {
-		return keepForward(t, o, h, words[0], want)
-	}
-	l, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", want))
-	if err != nil {
-		t.Sayln("errand serve forward:", err)
-		return 1
-	}
-	defer l.Close()
-	if _, err := reach.LinkTo(t, h); err != nil { // said now, rather than at the first connection
-		t.Sayln("errand serve forward:", err)
-		return 1
-	}
-	t.Printf("http://127.0.0.1:%d\n", l.Addr().(*net.TCPAddr).Port)
-	forwardTo(l, func() (*reach.Link, error) { return reach.LinkTo(t, h) }, words[0], port, func(s string) { t.Sayln("errand serve forward:", s) })
-	select {
-	case <-t.Sigs:
-	case <-t.Gone:
-	}
-	return 0
 }

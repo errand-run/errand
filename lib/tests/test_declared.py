@@ -173,18 +173,9 @@ del errand.runners[ "cargo" ]
         assert got[ "catch2" ][ "build" ] == [ "make" ] and got[ "bench" ][ "type" ] == "Pytest"
 
 
-if test( "services, as data: what errand keeps of one, and what is wrong said" ):
-    from errand.serve import Service, http_json
-    d = Service( "srv --port {port:a}", ports = { "a": 8000, "b": ":9000", "c": None }, gpus = 1, idle = "90s", busy = http_json( "/api", port = "a" ),
-                 ready = lambda ports: True ).data()
-    assert d[ "command" ] == [ "srv", "--port", "{port:a}" ] and d[ "ports" ] == [ [ "a", 8000, None ], [ "b", None, 9000 ], [ "c", None, None ] ]
-    assert d[ "busy" ] == { "http_json": "/api", "port": "a" } and d[ "ready" ] == { "function": True } and d[ "needs" ] == { "gpus": 1 } and d[ "idle" ] == 90.0
-    assert json.loads( json.dumps( d ) ) == d
-    refused( lambda: Service( "x {port}", ports = { "a": 1, "b": 2 } ), "{port}" )
-    refused( lambda: Service( "x {port:no}" ), "no such port" )
-    refused( lambda: Service( "x", ports = "1:1" ), "twice" )
-    refused( lambda: Service( "x", idle = "soon" ), "a duration" )
-    refused( lambda: Service( [ ] ), "a command" )
+if test( "services are asked for in full: what declared them says so" ):
+    refused( lambda: errand.services, "errand serve", kind = AttributeError )
+    refused( lambda: errand.Checkout, "errand serve dev", kind = AttributeError )
 
 
 if test( "tags, parameters, steps: what a run reads and says" ):

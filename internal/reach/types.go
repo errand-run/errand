@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"sort"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/errand-run/errand/internal/draw"
 	"github.com/errand-run/errand/internal/kit"
+	"github.com/errand-run/errand/internal/system"
 )
 
 // TableRow is one run an agent holds.
@@ -65,19 +67,22 @@ type KeptRow struct {
 }
 
 type OverviewDoc struct {
-	V       int          `json:"v"`
-	Host    string       `json:"host"`
-	User    string       `json:"user"`
-	System  string       `json:"system"`
-	Now     float64      `json:"now"`
-	Cache   string       `json:"cache"`
-	Rows    []TableRow   `json:"rows"`
-	Agents  []AgentRow   `json:"agents"`
-	Kept    []KeptRow    `json:"kept"`
-	Serving []ServingRow `json:"serving"`
-	Rested  []ServingRow `json:"rested,omitempty"` // the services that ran here and do not now ( apart: a row of Serving is one that is held )
-	VMs     []VmRow      `json:"vms"`
-	Shared  bool         `json:"shared,omitempty"` // errand leaves nothing there
+	V          int          `json:"v"`
+	Host       string       `json:"host"`
+	User       string       `json:"user"`
+	System     string       `json:"system"`
+	Now        float64      `json:"now"`
+	Cache      string       `json:"cache"`
+	Rows       []TableRow   `json:"rows"`
+	Agents     []AgentRow   `json:"agents"`
+	Kept       []KeptRow    `json:"kept"`
+	Serving    []ServingRow `json:"serving"`
+	Leases     []LeaseRow   `json:"leases,omitempty"`
+	Rested     []ServingRow `json:"rested,omitempty"`     // the services that ran here and do not now ( apart: a row of Serving is one that is held )
+	Authorized []AuthRow    `json:"authorized,omitempty"` // what pages and keys may ask for here ( ADR 0040 )
+	Refused    []RefusedRow `json:"refused,omitempty"`    // what they asked for lately, and were refused
+	VMs        []VmRow      `json:"vms"`
+	Shared     bool         `json:"shared,omitempty"` // errand leaves nothing there
 }
 
 // ServingRow is a service an agent keeps ( agent/serve.go ); vmRow, a machine it boots ( vm.go ).
@@ -92,22 +97,97 @@ type ServingRow struct {
 	Started float64 `json:"started"`
 	Leaf    string  `json:"leaf,omitempty"`
 
-	Command []string      `json:"command,omitempty"`
-	Source  string        `json:"source,omitempty"` // where it is declared
-	Needs   string        `json:"needs,omitempty"`
-	Ports   []ServingPort `json:"ports,omitempty"`
-	Pid     int           `json:"pid,omitempty"`   // of the server; 0: not started
-	Agent   int           `json:"agent,omitempty"` // the pid of the agent that holds it
-	Waiting int           `json:"waiting,omitempty"`
-	Idle    float64       `json:"idle,omitempty"`
-	Log     string        `json:"log,omitempty"`
-	Ended   float64       `json:"ended,omitempty"` // one that rests: since when
+	On      string            `json:"on,omitempty"`     // the layers it is started in
+	Config  string            `json:"config,omitempty"` // the hash of its definition
+	Key     string            `json:"key,omitempty"`    // ... and of the program found for it
+	Vars    map[string]string `json:"vars,omitempty"`
+	Cwd     string            `json:"cwd,omitempty"`
+	Command []string          `json:"command,omitempty"`
+	Source  string            `json:"source,omitempty"` // where it is declared
+	Needs   string            `json:"needs,omitempty"`
+	Ports   []ServingPort     `json:"ports,omitempty"`
+	Pid     int               `json:"pid,omitempty"`   // of the server; 0: not started
+	Agent   int               `json:"agent,omitempty"` // the pid of the agent that holds it
+	Waiting int               `json:"waiting,omitempty"`
+	Idle    float64           `json:"idle,omitempty"`
+	Log     string            `json:"log,omitempty"`
+	Ended   float64           `json:"ended,omitempty"` // one that rests: since when
 }
 
-// ServingPort is one port of a service that is held: where clients come, and where the server is.
+// AuthRow is a server authorized to pages or to a key ( svc/authorized.go ).
+type AuthRow struct {
+	Hash       string            `json:"hash"`
+	Label      string            `json:"label"`
+	To         []string          `json:"to"`
+	Page       string            `json:"page,omitempty"`
+	Since      string            `json:"since"`
+	Used       string            `json:"used,omitempty"`
+	Command    []string          `json:"command"`
+	Vars       map[string]string `json:"vars,omitempty"` // ( those that hold a secret aside )
+	Needs      string            `json:"needs,omitempty"`
+	Cwd        string            `json:"cwd,omitempty"`
+	Idle       float64           `json:"idle,omitempty"`
+	Keep       float64           `json:"keep,omitempty"`
+	Unverified bool              `json:"unverified,omitempty"`
+	Dev        string            `json:"dev,omitempty"`
+	Error      string            `json:"error,omitempty"` // what cannot be read of it
+}
+
+// RefusedRow is something asked for here that was not authorized.
+type RefusedRow struct {
+	Who     string   `json:"who"`
+	What    string   `json:"what"`
+	Why     string   `json:"why"`
+	From    string   `json:"from,omitempty"`
+	Command []string `json:"command,omitempty"` // what would run, when it is known there
+	At      float64  `json:"at"`
+	Times   int      `json:"times"`
+}
+
+// LeaseRow is a lease an agent listens for ( agent/lease.go ).
+type LeaseRow struct {
+	ID      string            `json:"id"`
+	Name    string            `json:"name"`
+	Config  string            `json:"config"` // of the server it leads to
+	Ports   []ServingPort     `json:"ports"`
+	Until   float64           `json:"until"`
+	Keep    float64           `json:"keep"`
+	Taken   float64           `json:"taken"`
+	Users   int               `json:"users"`
+	Refused int               `json:"refused,omitempty"` // connections of other accounts
+	Failed  string            `json:"failed,omitempty"`  // why its server did not start, the last time
+	Command []string          `json:"command"`
+	Vars    map[string]string `json:"vars,omitempty"` // ( those that hold a secret aside )
+	Needs   string            `json:"needs,omitempty"`
+	Idle    float64           `json:"idle"`
+	Cwd     string            `json:"cwd"`
+	Others  bool              `json:"others,omitempty"`
+	Source  string            `json:"source,omitempty"`
+	On      string            `json:"on,omitempty"`     // the machine it leads to; "": this one
+	Layers  string            `json:"layers,omitempty"` // what its server is started in
+	Listen  string            `json:"listen,omitempty"` // the address its ports are listened on; "": 127.0.0.1
+	Always  bool              `json:"always,omitempty"` // the system listens on them in errand's stead
+	HoldEnd float64           `json:"hold_end,omitempty"`
+}
+
+// Address: where its ports are reached, from its machine
+func (l LeaseRow) Address() string { return ReachedAt(l.Listen) }
+
+// ReachedAt: where a port listened on at an address is reached from its machine -- 127.0.0.1 for one that is any
+func ReachedAt(listen string) string {
+	if ip := net.ParseIP(listen); ip == nil || ip.IsUnspecified() {
+		return "127.0.0.1"
+	}
+	if strings.Contains(listen, ":") {
+		return "[" + listen + "]"
+	}
+	return listen
+}
+
+// ServingPort is one port of a service: where clients come, and where the server is.
 type ServingPort struct {
 	Name   string `json:"name"`
-	Port   int    `json:"port"`
+	Port   int    `json:"port,omitempty"`
 	Server int    `json:"server,omitempty"`
 }
 
@@ -349,8 +429,7 @@ func UsedMachine(h HostSpec, hostname string) {
 }
 
 func HereName() string {
-	name, _ := os.Hostname()
-	return strings.SplitN(name, ".", 2)[0]
+	return system.ShortHost()
 }
 
 func ShellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }

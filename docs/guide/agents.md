@@ -32,11 +32,15 @@ Nothing is installed over there: errand sends its program, once per version. →
 A job does not depend on whoever started it: the laptop may sleep, an update may come. An agent of a newer errand takes the place over, and
 the older one stays until its jobs have ended ( a relay ).
 
+What a machine keeps is under its name: its agents, its queue, its ports. On a Mac that is the one of the Sharing settings ( `scutil --get
+LocalHostName` ), not `hostname`, which changes with the network.
+
 ## Kept warm, for a while
 
 | what | stays up when unused | set by |
 |---|---|---|
 | an agent | 15 minutes | `ERRAND_KEEP_ALIVE` ( seconds ) |
+| ... that keeps a port for a server | as long as its [lease](./serve#a-port-and-until-when) | `errand serve --keep` |
 | a Slurm allocation | 1 minute by default; `0`: one job per command | [`Slurm( keep_alive = "30m" )`](./layers/slurm) |
 | a Windows virtual machine | 5 minutes | [`Windows( keep = "5m" )`](./layers/windows) |
 
@@ -58,7 +62,7 @@ errand.envs[ "far" ] = errand.Env( [ errand.Ssh( "login.cluster.org", shared = T
 
 - an agent goes 2 minutes after its last client, instead of 15;
 - a service goes after 10 minutes idle at most, and after 2 hours in all, whatever it declares;
-- no port is kept by the system ( `errand web keep`, `forward --keep` are refused );
+- no port is kept by the system ( `errand web keep` is refused );
 - `errand status` says in red what is still up there.
 
 It is the machine's own agent that decides, from what it sees: a flag forgotten on the driving side

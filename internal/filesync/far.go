@@ -26,6 +26,7 @@ import (
 
 	"github.com/errand-run/errand/internal/kit"
 	"github.com/errand-run/errand/internal/reach"
+	"github.com/errand-run/errand/internal/system"
 )
 
 const (
@@ -116,7 +117,7 @@ func NoteCopy(root string) {
 	if said := kit.ReadJSON(f); said != nil {
 		id = said["id"]
 	} else if out, err := os.OpenFile(f, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644); err == nil {
-		host, _ := os.Hostname()
+		host := system.Hostname()
 		made := kit.RandomID()
 		_ = json.NewEncoder(out).Encode(map[string]any{"id": made, "made": time.Now().Format("2006-01-02T15:04:05"), "host": host})
 		out.Close()

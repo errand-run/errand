@@ -67,7 +67,7 @@ and the same, ad hoc, on the command line:
     errand serve [--gpus N --gpu-ram R --ram R --cpus N -n LABEL] [--idle 10m] [--busy-if CMD]
                  [--port P] [--name NAME] [--ensure] [-f] -- <command of the server>
 
-- A service is **one per (user, machine, name)** ( amended by [ADR 0040](0040-servers-of-one-name-coexist.md): and configuration ). The name: declared, `--name`, else the label, else
+- A service is **one per (user, machine, name)** ( amended by [ADR 0040](0040-a-server-is-what-is-asked-for.md): a server is its definition ). The name: declared, `--name`, else the label, else
   the command's first word.
 - The user's file is new: errand reads envs in the project and its parents only, and a service belongs
   to a machine and a user, not a project. The relay of boucles is started by ssh from `~`, outside any

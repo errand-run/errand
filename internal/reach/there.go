@@ -1,6 +1,8 @@
 // The bridge to a place's agent ( ADR 0035 ): what one `ssh` starts on the machine a command reaches.
 //
-//	errand there        its standard streams joined to the socket of this machine's agent; never typed by hand
+//	errand there                  its standard streams joined to the socket of this machine's agent; never typed by hand
+//	errand there --only key:NAME  what an ssh key's forced command is, for a key that may reach only the servers
+//	                              authorized to it ( only.go, ADR 0040 )
 //
 // The agent is started first when it is not there, and outlives the bridge: it is not at the end of the ssh pipe
 // ( ADR 0005 ). A connection that drops takes the bridge with it, and nothing else.
@@ -22,6 +24,13 @@ import (
 const updateWord = "errand-update: "
 
 func ThereMain(args []string) int {
+	switch {
+	case len(args) == 2 && args[0] == "--only" && keyName.MatchString(args[1]):
+		return thereOnly(args[1])
+	case len(args) > 0:
+		fmt.Fprintln(os.Stderr, "errand there [--only key:NAME]: the command of an ssh key, never typed by hand")
+		return 2
+	}
 	if newer := NewerHere(); newer != "" {
 		fmt.Fprintf(os.Stderr, "%sa newer errand ( release %s ) is in use on this machine, and the one that asks is release %s: update it\n", updateWord, newer, Release)
 		return 3

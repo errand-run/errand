@@ -8,8 +8,9 @@
 //	POST .errand/machines/<M>/paths  {"tool", "path"}    a place for M's agent to look
 //	ANY  .errand/svc/<name>/<p>              relayed to `name#version` on the machine chosen, started there first
 //
-// A page starts only what both sides name: a service its `services.json` lists, and that the machine declares under that
-// exact name and version. Nothing in a page declares a command: the lines are for a person to type.
+// A page starts only what both sides name: a service its `services.json` lists, and that the machine authorizes to pages under
+// that exact name and version ( ADR 0040 ). Nothing in a page says a command: the lines are for a person to type, or to
+// confirm in errand's own page.
 
 package page
 
@@ -466,7 +467,7 @@ func (p pageAsk) relay(rw http.ResponseWriter, r *http.Request, name string, wan
 		if err != nil {
 			return nil, err
 		}
-		req := map[string]any{"op": "service_connect", "name": key, "cwd": ""}
+		req := map[string]any{"op": "service_connect", "page": key, "from": p.dir}
 		if !m.Here() {
 			req = map[string]any{"op": "at", "host": m.M.Spec(), "req": req, "environ": os.Environ()}
 		}
@@ -491,8 +492,8 @@ func (p pageAsk) relay(rw http.ResponseWriter, r *http.Request, name string, wan
 		FlushInterval: -1,
 		ErrorHandler: func(rw http.ResponseWriter, r *http.Request, err error) {
 			code := http.StatusServiceUnavailable
-			if strings.Contains(err.Error(), "is declared on") {
-				code, err = http.StatusForbidden, errors.New("this machine declares no service "+fmt.Sprintf("%q", key))
+			if strings.Contains(err.Error(), "is not authorized to pages") {
+				code, err = http.StatusForbidden, errors.New(key+" is not authorized to pages on "+on)
 			}
 			http.Error(rw, fmt.Sprintf("service %q: %v", name, err), code)
 		},

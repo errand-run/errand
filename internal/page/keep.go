@@ -60,7 +60,7 @@ func webKeep(on bool) int {
 		port  int
 		verb  string
 	}{{units.WebLabel, runinfo.PortOfUser(), "kept-page"}, {units.StoresLabel, runinfo.PortOfUser() + 2, "kept-stores"}} {
-		if err := units.KeepPort(k.label, []string{self, "web", "serve-" + k.verb}, k.port); err != nil {
+		if err := units.KeepPort(k.label, []string{self, "web", "serve-" + k.verb}, "", k.port); err != nil {
 			fmt.Fprintln(os.Stderr, "errand web keep:", err)
 			return 1
 		}

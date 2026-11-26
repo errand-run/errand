@@ -4,15 +4,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/errand-run/errand/internal/caches"
 	"github.com/errand-run/errand/internal/kit"
 	"github.com/errand-run/errand/internal/reach"
-	"github.com/errand-run/errand/internal/runinfo"
 	"github.com/errand-run/errand/internal/svc"
-	"github.com/errand-run/errand/internal/units"
 )
 
 // ── the command ──────────────────────────────────────────────────────────────
@@ -126,52 +125,6 @@ func pageServicesMain(t *reach.Term, verb string, o serveOptions, words []string
 		}
 		t.Printf("%s: %s   %s\n", o.command[0], kit.Text(got["version"]), kit.Text(got["output"]))
 		return 0
-	case "install":
-		if len(words) != 1 || !strings.Contains(words[0], "#") {
-			t.Sayln("errand serve install [--on M] [--gpus N] [--idle T] NAME#VERSION [-- WORDS]")
-			return 2
-		}
-		req := map[string]any{"do": "install", "key": words[0], "yes": true}
-		needs := map[string]any{}
-		for k, v := range o.spec.Needs {
-			needs[k] = v
-		}
-		if o.spec.Idle != 600 {
-			needs["idle"] = o.spec.Idle
-		}
-		if len(needs) > 0 {
-			req["needs"] = needs
-		}
-		if len(o.command) > 0 {
-			req["words"] = o.command
-		} else { // composed from the package there: shown, then asked
-			composed, err := o.asked(t, map[string]any{"do": "compose", "key": words[0]})
-			if err != nil {
-				return fail(err)
-			}
-			t.Println(kit.Text(composed["text"]))
-			if !o.yes {
-				answer, ok := "", false
-				if t.TtyIn && t.TtyOut {
-					answer, ok = t.Ask("install it? [y/N] ")
-				}
-				if answer = strings.ToLower(answer); !ok || (answer != "y" && answer != "yes" && answer != "o" && answer != "oui") {
-					t.Println("not installed")
-					return 1
-				}
-			}
-		}
-		got, err := o.asked(t, req)
-		if err != nil {
-			return fail(err)
-		}
-		d, _ := got["declaration"].(map[string]any)
-		note := ""
-		if d["provider"] == nil {
-			note = "   unverified: no package there provides this version"
-		}
-		t.Printf("%s: declared on %s in %s   %s%s\n", words[0], on, kit.Text(got["file"]), strings.Join(kit.Strs(d["command"]), " "), note)
-		return 0
 	}
 	return 2
 }
@@ -266,47 +219,39 @@ func versionsMain(t *reach.Term, o serveOptions) int {
 	return 0
 }
 
-// keepForward: a port the system keeps, and the forward started at its first connection
-func keepForward(t *reach.Term, o serveOptions, h *reach.HostSpec, name string, port int) int {
-	label := "dev.errand.forward." + runinfo.NameOf(name)
-	if o.off {
-		if units.UnkeepPort(label) {
-			t.Println("  " + name + ": the port given back")
-		} else {
-			t.Println("  " + name + ": was not kept")
-		}
-		return 0
+// serveConfig: what a person says of this machine for the services of pages -- a checkout that stands for a repository, a source
+// code may be taken from
+func serveConfig(t *reach.Term, o serveOptions, verb string, words []string) int {
+	usage := "errand serve source URL [--off]"
+	if verb == "dev" {
+		usage = "errand serve dev REPOSITORY PATH [--env ENV], errand serve dev REPOSITORY --off"
 	}
-	if port == 0 {
-		t.Sayln("errand serve forward --keep: the port to keep, --port N ( the one your clients know )")
+	if len(words) == 0 || (verb == "source" && len(words) > 1) || (verb == "dev" && !o.off && len(words) != 2) {
+		t.Sayln(usage)
 		return 2
 	}
-	argv := []string{reach.TypedPath(os.Getenv), "kept-forward", name, h.Host}
-	if err := units.KeepPort(label, append(argv, h.Options...), port); err != nil {
-		t.Sayln("errand serve forward --keep:", err)
+	err := svc.ChangeConfig(func(c *svc.Config) {
+		switch {
+		case verb == "dev" && o.off:
+			delete(c.Dev, words[0])
+		case verb == "dev":
+			was := c.Dev[words[0]]
+			was.Path, was.Env = words[1], o.env
+			c.Dev[words[0]] = was
+		default:
+			if c.Sources == nil {
+				c.Sources = svc.UsualSources()
+			}
+			c.Sources = slices.DeleteFunc(c.Sources, func(s string) bool { return s == words[0] })
+			if !o.off {
+				c.Sources = append(c.Sources, words[0])
+			}
+		}
+	})
+	if err != nil {
+		t.Sayln("errand serve:", err)
 		return 1
 	}
-	t.Printf("http://127.0.0.1:%d   -> %s on %s, kept by the system: errand starts at the first connection\n", port, name, h.Host)
-	return 0
-}
-
-// KeptForwardMain: what the system starts for a port it keeps
-func KeptForwardMain(args []string) int {
-	if len(args) < 2 {
-		return 2
-	}
-	lis, err := units.InheritedListener()
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "errand serve forward: no socket from the system")
-		return 2
-	}
-	h := &reach.HostSpec{Host: args[1], Options: args[2:]}
-	t := &reach.Term{Environ: os.Environ(), Emit: func(byte, []byte) {}}
-	conns := forwardTo(lis, func() (*reach.Link, error) { return reach.LinkTo(t, h) }, args[0], "", func(s string) { fmt.Fprintln(os.Stderr, s) })
-	for last := time.Now(); time.Since(last) < 10*time.Minute; time.Sleep(time.Second) {
-		if conns() > 0 {
-			last = time.Now()
-		}
-	}
+	t.Println("  " + svc.ConfigFile())
 	return 0
 }

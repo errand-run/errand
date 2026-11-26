@@ -634,7 +634,50 @@ func serviceWords(m *UiMachine, s reach.ServingRow) string {
 	if s.Ended > 0 {
 		return strings.TrimSpace(s.State + "  " + s.More + "  " + reach.Span(m.now()-s.Ended) + " ago")
 	}
-	return strings.TrimSpace(s.State + "  " + s.More + "  " + reach.Span(m.now()-s.Started))
+	var said []string
+	for _, w := range []string{s.State, s.More, addresses(leasesOf(m, s.Config)), reach.Span(m.now() - s.Started)} {
+		if w != "" {
+			said = append(said, w)
+		}
+	}
+	return strings.Join(said, "  ")
+}
+
+// leasesOf: the leases that lead to a server
+func leasesOf(m *UiMachine, config string) []reach.LeaseRow {
+	var out []reach.LeaseRow
+	for _, l := range m.doc.Leases {
+		if config != "" && l.Config == config {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
+// addresses: where clients come, by its leases
+func addresses(leases []reach.LeaseRow) string {
+	var out []string
+	for _, l := range leases {
+		for _, p := range l.Ports {
+			out = append(out, fmt.Sprintf("%s:%d", l.Address(), p.Port))
+		}
+	}
+	return strings.Join(out, " ")
+}
+
+// serverName: its label, and what tells it from another of that label
+func serverName(m *UiMachine, name, config string) string {
+	for _, s := range m.doc.Serving {
+		if s.Name == name && s.Config != config {
+			return name + "~" + config[:min(4, len(config))]
+		}
+	}
+	for _, l := range m.doc.Leases {
+		if l.Name == name && l.Config != config {
+			return name + "~" + config[:min(4, len(config))]
+		}
+	}
+	return name
 }
 
 // serverRows: the servers kept on every machine, with what runs
@@ -648,11 +691,11 @@ func (u *Ui) serverRows(q UiAsked) []UiRow {
 		}
 		for _, s := range m.doc.Serving {
 			s := s
-			if (q.Project != "" && !reach.SameProject(q.Project, s.Project)) || !matches(q.Query, m.Name(), "service", s.Name, s.State) {
+			if q.Project != "" || !matches(q.Query, m.Name(), "service", s.Name, s.State) {
 				continue
 			}
 			if n++; open {
-				rows = append(rows, UiRow{Key: rowKey("service", m.Name(), s.Name), Label: fmt.Sprintf("%-12s %s", shortName(m.Name()), s.Name), Detail: serviceWords(m, s), Kind: "service",
+				rows = append(rows, UiRow{Key: rowKey("service", m.Name(), s.Name+"~"+s.Key), Label: fmt.Sprintf("%-12s %s", shortName(m.Name()), serverName(m, s.Name, s.Config)), Detail: serviceWords(m, s), Kind: "service",
 					Mark: serviceMark(s), Machine: ptr(m.Name()), What: &s, on: m})
 			}
 		}
@@ -768,8 +811,41 @@ func (u *Ui) machineRows(q UiAsked) []UiRow {
 				if s.Ended > 0 {
 					kind = "rested"
 				}
-				rows = append(rows, UiRow{Key: rowKey("service", m.Name(), s.Name), Label: "service " + s.Name, Detail: serviceWords(m, s), Kind: kind, Mark: serviceMark(s), Depth: 1,
+				rows = append(rows, UiRow{Key: rowKey("service", m.Name(), s.Name+"~"+s.Key), Label: "service " + serverName(m, s.Name, s.Config), Detail: serviceWords(m, s), Kind: kind, Mark: serviceMark(s), Depth: 1,
 					Machine: ptr(m.Name()), What: &s, on: m})
+			}
+		}
+		for _, l := range m.doc.Leases {
+			l := l
+			if matches(q.Query, m.Name(), "port", l.Name) {
+				said, mark := "kept "+reach.Span(l.Until-m.now()), ""
+				where := ""
+				if l.On != "" {
+					where = " on " + l.On
+				}
+				if l.Failed != "" {
+					said, mark = "failed  "+l.Failed, "FAIL"
+				}
+				rows = append(rows, UiRow{Key: rowKey("lease", m.Name(), l.ID), Label: "port " + addresses([]reach.LeaseRow{l}) + " → " + serverName(m, l.Name, l.Config) + where, Detail: said, Kind: "lease",
+					Mark: mark, Depth: 1, Machine: ptr(m.Name()), What: &l, on: m})
+			}
+		}
+		for _, a := range m.doc.Authorized {
+			a := a
+			if matches(q.Query, m.Name(), "authorized", a.Label, a.Hash, strings.Join(a.To, " ")) {
+				said, mark := "to "+strings.Join(a.To, ", "), ""
+				if a.Error != "" {
+					said, mark = a.Error, "FAIL"
+				}
+				rows = append(rows, UiRow{Key: rowKey("authorized", m.Name(), a.Hash), Label: "authorized " + a.Label + "~" + a.Hash, Detail: said, Kind: "authorized",
+					Mark: mark, Depth: 1, Machine: ptr(m.Name()), What: &a, on: m})
+			}
+		}
+		for _, r := range m.doc.Refused {
+			r := r
+			if matches(q.Query, m.Name(), "refused", r.Who, r.What) {
+				rows = append(rows, UiRow{Key: rowKey("refused", m.Name(), r.Who+" "+r.What+" "+r.From), Label: "refused " + r.What + " to " + r.Who, Detail: reach.Span(m.now()-r.At) + " ago",
+					Kind: "refused", Mark: "refused", Depth: 1, Machine: ptr(m.Name()), What: &r, on: m})
 			}
 		}
 		for _, k := range m.doc.Kept {
@@ -798,7 +874,7 @@ func (u *Ui) find(key string) (*UiRow, error) {
 	switch {
 	case strings.HasPrefix(kind, "c") || kind == "mount" || kind == "sdir" || kind == "svcs" || kind == "svcver":
 		tabs = []string{"caches"}
-	case kind == "machine" || kind == "dormant" || kind == "vm" || kind == "service" || kind == "unowned" || kind == "note":
+	case kind == "machine" || kind == "dormant" || kind == "vm" || kind == "service" || kind == "lease" || kind == "authorized" || kind == "refused" || kind == "unowned" || kind == "note":
 		tabs = []string{"machines", "runs"}
 	}
 	for _, tab := range tabs {

@@ -186,7 +186,7 @@ func lockCache(root string, wait float64) func() {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	host, _ := os.Hostname()
+	host := system.Hostname()
 	_ = os.WriteFile(filepath.Join(lock, "owner"), []byte(fmt.Sprintf("%s %d\n", host, os.Getpid())), 0o644)
 	return func() { _ = os.RemoveAll(lock) }
 }
@@ -812,7 +812,7 @@ func RegisteredCaches() []map[string]any {
 // holdCaches: this machine holds the registered directories named by id or path ( all of them when "" ): its host
 // agent purges them. -> [ [ path, previous holder ] ]
 func holdCaches(which string) [][]any {
-	host, _ := os.Hostname()
+	host := system.Hostname()
 	out := [][]any{}
 	for _, rec := range RegisteredCaches() {
 		path, _ := rec["path"].(string)
@@ -841,7 +841,7 @@ func holdCaches(which string) [][]any {
 
 // removeIn: `removeFromCache` on cache `cache` of the registered directory named by its id ( or its path )
 func removeIn(which, cache string, keys []string, rule string, days float64, dry bool) map[string]any {
-	host, _ := os.Hostname()
+	host := system.Hostname()
 	for _, rec := range RegisteredCaches() {
 		path, _ := rec["path"].(string)
 		if id, _ := rec["id"].(string); which == "" || (which != id && which != path) {
@@ -863,7 +863,7 @@ func removeIn(which, cache string, keys []string, rule string, days float64, dry
 // PurgeHeld: a host agent's daily round ( ADR 0022 ) -- the registered directories this machine holds, in the bare
 // view, those not purged for a day. -> [ [ path, name, report ] ]
 func PurgeHeld(say func(string)) [][]any {
-	host, _ := os.Hostname()
+	host := system.Hostname()
 	out := [][]any{}
 	for _, rec := range RegisteredCaches() {
 		if h, _ := rec["host"].(string); h != "" && strings.SplitN(h, ".", 2)[0] != strings.SplitN(host, ".", 2)[0] {
@@ -880,7 +880,7 @@ func PurgeHeld(say func(string)) [][]any {
 // ── what the agent answers ───────────────────────────────────────────────────
 
 func CachesAnswer(req map[string]any) map[string]any {
-	host, _ := os.Hostname()
+	host := system.Hostname()
 	if req["op"] == "caches_hold" {
 		which, _ := req["id"].(string)
 		return map[string]any{"ok": true, "held": holdCaches(which), "host": host}

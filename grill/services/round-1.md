@@ -37,6 +37,8 @@ L'appelant peut demander un bail plus long (`--for 7d`). Un agent qui attend co�
 
 **Réponse :**
 
+Pour moi, c'est un paramètre qui dépend uniquement de la demande. Lors de la demande, on peut faire une demande en rapport avec la fréquence et le profil des demandes. On pourra toujours demande large pour ne pas s'embêter. Il n'y a pas de durée fixe
+
 ---
 
 ## Q3 : Le numéro après le bail
@@ -69,6 +71,10 @@ La contrainte : passer par `url()` au lieu de garder une chaîne. Qui ne le fait
 
 **Réponse :**
 
+Oui c'est ça. Rq: idéalement, s'il n'y a pas d'agent, il faut pouvoir en réveiller un.
+
+Rq: je ne sais pas ce qu'il y a dans `"ollama.toml", env = "lmo"`. Je préfèrerais que par défaut tout passe par des arguments explicites (qui seront bien sûr sérialisés pour les requêtes).
+
 ---
 
 ## Q5 : `services.py`
@@ -100,6 +106,9 @@ Proposition : elles gardent leur fichier actuel (`services-installed.json`), éc
 ➡️ **Recommandé :** oui, ce fichier reste, réservé aux pages.
 
 **Réponse :**
+
+Oui. Ce n'est pas tant une question d'installation que d'autorisation. `version` pourrait être le hash de la définition.
+Du coup, ça pourrait être `authorized-services.json` (avec un suivi dans l'interface web)
 
 ---
 
@@ -162,6 +171,8 @@ Ce qui se règle par requête (modèle, `num_ctx`, `keep_alive` dans le corps de
 
 **Réponse :**
 
+Pas la peine de faire des fichiers et de vérifications. On va se débrouiller.
+
 ---
 
 ## Q11 : Où est le port qu'on reçoit
@@ -173,6 +184,9 @@ Le bail est alors tenu par l'agent local, et l'agent de lmo ne garde que le serv
 ➡️ **Recommandé :** toujours un port local ; `forward` disparaît.
 
 **Réponse :**
+
+Ça me plait beaucoup. Cependant, pour le cas `Boucles` dans `maison`, il faudra regarder comment gérer la sécurité.
+Autre point : si 2 machines veulent ollama sur lmo, comment faire en sorte que ollama soit partagé ? Ça veut dire qu'un agent a le concept de "run partagé", c'est bien ça ?
 
 ---
 
@@ -187,6 +201,8 @@ Boucles n'a pas errand dans son conteneur, et sa clé ssh ne doit permettre qu'u
 ➡️ **Recommandé :** (a). `connect` reste le moyen « sans port », et la clé continue de n'ouvrir qu'un service.
 
 **Réponse :**
+
+Est-ce qu'on pourrait imaginer avoir un errand local avec un profil sur le errand distant pour n'autoriser que certains actions ?
 
 ---
 

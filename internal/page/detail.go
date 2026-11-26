@@ -19,6 +19,7 @@ import (
 	"github.com/errand-run/errand/internal/kit"
 	"github.com/errand-run/errand/internal/reach"
 	"github.com/errand-run/errand/internal/runinfo"
+	"github.com/errand-run/errand/internal/svc"
 )
 
 type UiDetail struct {
@@ -334,6 +335,20 @@ func (u *Ui) facts(row *UiRow, m *UiMachine, step *stepFull) [][2]string {
 			out = append(out, [2]string{k, v})
 		}
 	}
+	definition := func(command []string, vars map[string]string, cwd, needs, config string) {
+		line("command", strings.Join(command, " "))
+		names := make([]string, 0, len(vars))
+		for k := range vars {
+			names = append(names, k)
+		}
+		sort.Strings(names)
+		for _, k := range names {
+			line("$"+k, vars[k])
+		}
+		line("cwd", cwd)
+		line("needs", needs)
+		line("hash", config)
+	}
 	steps := func(now float64) {
 		if step == nil {
 			return
@@ -357,7 +372,6 @@ func (u *Ui) facts(row *UiRow, m *UiMachine, step *stepFull) [][2]string {
 	switch w := row.What.(type) {
 	case *reach.TableRow:
 		line("machine", m.Name())
-		line("project", w.Project)
 		line("what", w.What)
 		line("env", w.Env)
 		line("state", reach.StateWords(*w, m.now()))
@@ -371,7 +385,6 @@ func (u *Ui) facts(row *UiRow, m *UiMachine, step *stepFull) [][2]string {
 		line("leaf", w.Leaf)
 	case *runinfo.PastRun:
 		line("machine", w.Host)
-		line("project", w.Project)
 		line("what", w.What)
 		line("env", w.Env)
 		status := w.Status
@@ -416,22 +429,20 @@ func (u *Ui) facts(row *UiRow, m *UiMachine, step *stepFull) [][2]string {
 		line("machine", m.Name())
 		line("service", w.Name)
 		line("state", w.State)
-		line("says", strings.TrimLeft(strings.TrimPrefix(w.More, fmt.Sprintf("127.0.0.1:%d", w.Port)), ", ")) // ( its address has its own line )
-		for _, p := range w.Ports {
-			k, v := "address", fmt.Sprintf("127.0.0.1:%d", p.Port)
-			if len(w.Ports) > 1 {
-				k = p.Name
+		line("says", w.More)
+		for _, l := range leasesOf(m, w.Config) {
+			for _, p := range l.Ports {
+				k := "address"
+				if len(l.Ports) > 1 {
+					k = p.Name
+				}
+				line(k, fmt.Sprintf("127.0.0.1:%d  ( kept %s )", p.Port, reach.Span(l.Until-m.now())))
 			}
-			switch {
-			case w.Ended > 0:
-				v += "  ( kept for it: nothing listens now )"
-			case p.Server > 0:
-				v += fmt.Sprintf("  → the server's, %d", p.Server)
-			}
-			line(k, v)
 		}
-		if len(w.Ports) == 0 && w.Port > 0 {
-			line("address", fmt.Sprintf("127.0.0.1:%d", w.Port))
+		for _, p := range w.Ports {
+			if p.Server > 0 {
+				line("server's", fmt.Sprintf("%s %d", p.Name, p.Server))
+			}
 		}
 		if w.Ended > 0 {
 			line("stopped", reach.Span(m.now()-w.Ended)+" ago")
@@ -442,13 +453,12 @@ func (u *Ui) facts(row *UiRow, m *UiMachine, step *stepFull) [][2]string {
 				line("waiting", fmt.Sprintf("%d connection%s, until it answers", w.Waiting, reach.Plural(w.Waiting)))
 			}
 		}
-		line("command", strings.Join(w.Command, " "))
-		line("needs", w.Needs)
+		line("in", w.On)
+		definition(w.Command, w.Vars, w.Cwd, w.Needs, w.Config)
 		if w.Idle > 0 {
 			line("idle", "stops once unused for "+reach.Span(w.Idle))
 		}
-		line("declared", w.Source)
-		line("project", w.Project)
+		line("source", w.Source)
 		if w.Pid > 0 {
 			line("pid", fmt.Sprint(w.Pid))
 		}
@@ -456,6 +466,81 @@ func (u *Ui) facts(row *UiRow, m *UiMachine, step *stepFull) [][2]string {
 			line("held by", fmt.Sprintf("the agent %d", w.Agent))
 		}
 		line("journal", w.Log)
+	case *reach.LeaseRow:
+		line("machine", m.Name())
+		line("leads to", w.On)
+		line("service", w.Name)
+		for _, p := range w.Ports {
+			line(map[bool]string{true: "address", false: p.Name}[len(w.Ports) == 1], fmt.Sprintf("%s:%d", w.Address(), p.Port))
+		}
+		if w.Listen != "" {
+			line("listened on", w.Listen+": other machines may connect")
+		}
+		if w.Always {
+			line("always", "the system listens in errand's stead, and starts it at a connection")
+		}
+		if w.HoldEnd > 0 {
+			line("hold end", "a client's end is passed on once its server was silent "+reach.Span(w.HoldEnd))
+		}
+		line("until", fmt.Sprintf("%s from now; %s once it was last used", reach.Span(w.Until-m.now()), reach.Span(w.Keep)))
+		line("clients", fmt.Sprint(w.Users))
+		state := "at rest: the next connection starts its server"
+		if w.On != "" {
+			state = "on " + w.On + ": the next connection starts it, if it rests"
+		}
+		for _, s := range m.doc.Serving {
+			if s.Config == w.Config {
+				state = s.State
+			}
+		}
+		line("server", state)
+		line("failed", w.Failed)
+		line("in", w.Layers)
+		definition(w.Command, w.Vars, w.Cwd, w.Needs, w.Config)
+		line("idle", "its server stops once unused for "+reach.Span(w.Idle))
+		line("asked", reach.Span(m.now()-w.Taken)+" ago")
+		line("source", w.Source)
+		if w.Others {
+			line("others", "other accounts may connect")
+		}
+		if w.Refused > 0 {
+			line("refused", fmt.Sprintf("%d connection%s of other accounts", w.Refused, reach.Plural(w.Refused)))
+		}
+	case *reach.AuthRow:
+		line("machine", m.Name())
+		line("authorized", w.Label)
+		line("to", strings.Join(w.To, ", "))
+		line("asked as", w.Page)
+		line("failed", w.Error)
+		definition(w.Command, w.Vars, w.Cwd, w.Needs, w.Hash)
+		if w.Idle > 0 {
+			line("idle", "its server stops once unused for "+reach.Span(w.Idle))
+		}
+		if w.Keep > 0 {
+			line("keep", "its port stays "+reach.Span(w.Keep)+" after its last use")
+		}
+		line("from", w.Dev)
+		if w.Unverified {
+			line("unverified", "no package there gives this version: as it was typed")
+		}
+		line("since", w.Since)
+		line("used", map[bool]string{true: "never", false: w.Used}[w.Used == ""])
+		for _, who := range w.To {
+			if name, ok := strings.CutPrefix(who, "key:"); ok {
+				line("key "+name, `restrict,command="~/.cache/errand/bin/errand there --only `+who+`" …, or command="… errand serve connect `+w.Hash+`"`)
+			}
+		}
+	case *reach.RefusedRow:
+		line("machine", m.Name())
+		line("asked by", w.Who)
+		line("asked for", w.What)
+		line("from", w.From)
+		line("why", w.Why)
+		line("would run", svc.Typed(w.Command))
+		line("when", reach.Span(m.now()-w.At)+" ago")
+		if w.Times > 1 {
+			line("times", fmt.Sprint(w.Times))
+		}
 	case *reach.KeptRow:
 		line("machine", m.Name())
 		line(w.Kind, w.Text)
@@ -766,6 +851,12 @@ func (u *Ui) can(row *UiRow, m *UiMachine) map[string]any {
 		out["kill"] = true
 	}
 	switch row.Kind {
+	case "authorized":
+		out["withdraw"] = true
+	case "refused":
+		if r, ok := row.What.(*reach.RefusedRow); ok && r.Who == "pages" && len(r.Command) > 0 {
+			out["authorize"] = true
+		}
 	case "tnode", "tset", "thead", "run":
 		out["runs"] = true
 	case "cache", "cachefs":
@@ -814,7 +905,9 @@ func (u *Ui) KillList(row *UiRow) []killing {
 		if w.Ended > 0 {
 			break
 		}
-		out = append(out, killing{m, "service " + w.Name, map[string]any{"op": "service_stop", "name": w.Name}})
+		out = append(out, killing{m, "service " + w.Name, map[string]any{"op": "service_stop", "name": w.Name, "key": w.Key}})
+	case *reach.LeaseRow:
+		out = append(out, killing{m, "the port of " + w.Name + " ( given back )", map[string]any{"op": "lease_release", "id": w.ID}})
 	case *reach.VmRow:
 		out = append(out, killing{m, w.Text, map[string]any{"op": "vm_stop", "id": w.ID}})
 	case *reach.KeptRow:

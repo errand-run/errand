@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/errand-run/errand/internal/queue"
+	"github.com/errand-run/errand/internal/system"
 )
 
 // ── the machine's resources ──────────────────────────
@@ -191,13 +192,7 @@ func GpusNow() []any {
 	return cards
 }
 
-func shortHost() string {
-	h, _ := os.Hostname()
-	if h = strings.SplitN(h, ".", 2)[0]; h == "" {
-		return "localhost"
-	}
-	return h
-}
+func shortHost() string { return system.ShortHost() }
 
 // heldNow: what errand's claims hold on this machine, in all
 func heldNow() map[string]any {

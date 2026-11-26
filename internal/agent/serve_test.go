@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/errand-run/errand/internal/queue"
 	"github.com/errand-run/errand/internal/reach"
 )
 
@@ -18,14 +19,14 @@ func TestAServiceThatRestsIsSaid(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	write("idle", "keeper.log", "2026-11-25 14:00:00 errand: starting x\nhello\n2026-11-25 14:25:43 errand: stopped: unused for 2 min\n")
-	write("idle", "ports.json", `{"port":11435}`)
-	write("asked", "keeper.log", "2026-11-25 14:25:43 errand: stopped\nwhat the server wrote last\n")
-	write("bad", "keeper.log", "2026-11-25 14:25:43 errand: failed: no such program\n")
-	write("held", "keeper.log", "2026-11-25 14:25:43 errand: stopped\n")
-	write("up", "keeper.log", "2026-11-25 14:25:43 errand: starting x\n")
-	write("up", "server.json", `{"pid":1}`) // its server may still be there: no word of it
-	got := rested([]reach.ServingRow{{Name: "held"}})
+	dir := func(name string) string { return name + "~" + name + ".bb@" + queue.Host() }
+	write(dir("idle"), "keeper.log", "2026-11-25 14:00:00 errand: starting x\nhello\n2026-11-25 14:25:43 errand: stopped: unused for 2 min\n")
+	write(dir("asked"), "keeper.log", "2026-11-25 14:25:43 errand: stopped\nwhat the server wrote last\n")
+	write(dir("bad"), "keeper.log", "2026-11-25 14:25:43 errand: failed: no such program\n")
+	write(dir("held"), "keeper.log", "2026-11-25 14:25:43 errand: stopped\n")
+	write(dir("up"), "keeper.log", "2026-11-25 14:25:43 errand: starting x\n")
+	write(dir("up"), "server.json", `{"pid":1}`) // its server may still be there: no word of it
+	got := rested([]reach.ServingRow{{Name: "held", Key: "held.bb"}})
 	if len(got) != 3 {
 		t.Fatalf("%+v", got)
 	}
@@ -33,8 +34,5 @@ func TestAServiceThatRestsIsSaid(t *testing.T) {
 		if g := got[i]; g.Name != want.Name || g.State != want.State || g.More != want.More || g.Ended == 0 {
 			t.Errorf("%+v, not %+v", g, want)
 		}
-	}
-	if p := got[2].Ports; len(p) != 1 || p[0].Port != 11435 {
-		t.Errorf("the port kept for it: %+v", p)
 	}
 }

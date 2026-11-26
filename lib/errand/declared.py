@@ -1,7 +1,6 @@
 """What a project declares, as one document ( ADR 0031 ): written in Python, read as data.
 
     python -m errand.declared [ROOT]              the document of the project at ROOT, as JSON
-    python -m errand.declared --services [CWD]    the services this machine's file, and the project's around CWD, declare
 
 What a declaration holds that cannot be written down is listed ( `not_data`: where, and why ): what runs it refuses it,
 saying which.
@@ -142,11 +141,7 @@ def document( root: Path ) -> dict:
 def main( argv = None ) -> int:
     argv = list( sys.argv[ 1 : ] if argv is None else argv )
     out, sys.stdout = sys.stdout, sys.stderr                # ( what a project's file prints is not the document )
-    if argv[ : 1 ] == [ "--services" ]:
-        from .serve import document as services
-        doc = services( argv[ 1 ] if len( argv ) > 1 else None )
-    else:
-        doc = document( Path( argv[ 0 ] ).resolve() if argv else local.project_root() )
+    doc = document( Path( argv[ 0 ] ).resolve() if argv else local.project_root() )
     print( json.dumps( doc, indent = 1 ), file = out )
     return 0
 

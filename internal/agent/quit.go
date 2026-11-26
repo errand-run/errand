@@ -19,7 +19,7 @@ func (a *Place) quit(req map[string]any, f *reach.FarChan) {
 	a.mu.Lock()
 	deps := a.deps + a.claims
 	a.mu.Unlock()
-	if n := a.running() + a.keeping(); (n > 0 || deps > 0) && !force {
+	if n := a.running() + len(a.serving()) + len(a.vms()); (n > 0 || deps > 0) && !force {
 		f.Reply(map[string]any{"ok": true, "said": fmt.Sprintf("kept: %d running ( --force stops them )", max(n, deps))})
 		return
 	}

@@ -398,14 +398,14 @@ func (l serviceLook) summary(want AskedService, machine string) string {
 	case "ready":
 		return "Ready on " + machine + ": it starts when the page needs it."
 	case "installable":
-		return fmt.Sprintf("Not set up on %s yet. This page was made with %s: that code is fetched, then the service declared.%s", machine, made, todo)
+		return fmt.Sprintf("Not set up on %s yet. This page was made with %s: that code is fetched, then the service authorized to pages.%s", machine, made, todo)
 	case "unverified":
 		if todo == "" {
-			todo = " Fetch that code, then declare it again."
+			todo = " Fetch that code, then authorize it again."
 		}
-		return fmt.Sprintf("Declared on %s by hand, but errand holds no code of the version this page needs ( %s ) to check that declaration against.%s", machine, made, todo)
+		return fmt.Sprintf("Authorized on %s by hand, but errand holds no code of the version this page needs ( %s ) to check that authorization against.%s", machine, made, todo)
 	case "wrong version":
-		return fmt.Sprintf("Declared on %s, but its code changed since: it is not the version this page was made with ( %s ).%s", machine, made, todo)
+		return fmt.Sprintf("Authorized on %s, but its code changed since: it is not the version this page was made with ( %s ).%s", machine, made, todo)
 	case "unavailable":
 		return fmt.Sprintf("Cannot run on %s: %s.", machine, l.Why)
 	case "unknown":
@@ -422,7 +422,7 @@ type looker struct {
 	declared  map[string]ServiceSpec
 	running   map[string]string // the services the agents of this machine hold, and how each is
 	providers []provider
-	dev       map[string]devSource
+	dev       map[string]DevSource
 }
 
 func sayNumber(v any) string {
@@ -463,7 +463,7 @@ func (l *looker) fill(out *serviceLook, name string, want AskedService, describe
 		if kv == v {
 			mine = &s
 		}
-		line := fmt.Sprintf("%s declared ( %s )", k, s.Source)
+		line := fmt.Sprintf("%s authorized to pages", k)
 		if bad := WrongVersion(k, s.Provider); bad != "" {
 			line += " — " + bad
 		}
@@ -633,9 +633,9 @@ func (l *looker) fill(out *serviceLook, name string, want AskedService, describe
 		bad := WrongVersion(key, mine.Provider)
 		switch {
 		case bad != "":
-			missing("%s as it was declared: %s", key, bad)
+			missing("%s as it was authorized: %s", key, bad)
 			stop("wrong version", bad)
-		case kit.Text(mine.Provider) == "" && mine.Source == "installed": // nothing here to check it against
+		case kit.Text(mine.Provider) == "": // nothing here to check it against
 			unverified = true
 		default:
 			if stop("ready", ""); l.running[key] != "" {
@@ -644,7 +644,7 @@ func (l *looker) fill(out *serviceLook, name string, want AskedService, describe
 			return
 		}
 	} else {
-		missing("the declaration of %s on %s", key, l.machine)
+		missing("the authorization of %s to pages on %s", key, l.machine)
 	}
 
 	// the lines
@@ -693,8 +693,8 @@ func (l *looker) fill(out *serviceLook, name string, want AskedService, describe
 		words, err := p.compose(name, paths, true)
 		switch {
 		case err == nil:
-			propose(fmt.Sprintf("declare the service, as %s %s in %s runs it%s", p.Package, p.Version, filepath.Base(p.Env), what),
-				fmt.Sprintf("errand serve install --on %s%s %s -- %s", l.machine, flags, key, typedWords(words)), "")
+			propose(fmt.Sprintf("authorize the service to pages, as %s %s in %s runs it%s", p.Package, p.Version, filepath.Base(p.Env), what),
+				fmt.Sprintf("errand serve authorize --to pages --on %s%s %s -- %s", l.machine, flags, key, typedWords(words)), "")
 			declared = true
 		case git == "" && kit.Text(want.Package["name"]) == "":
 			stop("unavailable", err.Error())
@@ -704,14 +704,14 @@ func (l *looker) fill(out *serviceLook, name string, want AskedService, describe
 		}
 	}
 	if !declared {
-		if err := l.fetching(name, key, entry, want, flags, what, paths, propose); err != nil {
+		if err := l.fetching(name, key, entry, want, flags, what, paths, propose); err != nil && !unverified { // ( declared by hand, it runs, whatever brings its code )
 			stop("unavailable", err.Error())
 			return
 		}
 	}
 	switch {
 	case unverified:
-		stop("unverified", "declared by hand: no package here provides this version")
+		stop("unverified", "authorized by hand: no package here provides this version")
 	case out.State != "wrong version":
 		stop("installable", "")
 	}
@@ -730,7 +730,7 @@ func pathsOf(dir string, entry map[string]any) []string {
 	return out
 }
 
-// fetching: the lines that bring the code of a service here, then declare it ( ADR 0027, amendment ) -- from the
+// fetching: the lines that bring the code of a service here, then authorize it ( ADR 0027, amendment, 0040 ) -- from the
 // repository at the store's commit, into the service's own env, or, for a service with no Python, its files only
 func (l *looker) fetching(name, key string, entry map[string]any, want AskedService, flags, what string, tools map[string]string, propose func(comment, command, from string)) error {
 	python := false
@@ -739,13 +739,13 @@ func (l *looker) fetching(name, key string, entry map[string]any, want AskedServ
 	}
 	env, src, pkg := serviceEnv(key), want.Source, want.Package
 	install := func(words []string) string {
-		c := fmt.Sprintf("errand serve install --on %s%s %s", l.machine, flags, key)
+		c := fmt.Sprintf("errand serve authorize --to pages --on %s%s %s", l.machine, flags, key)
 		if words != nil {
 			c += " -- " + typedWords(words)
 		}
 		return c
 	}
-	asks := "declare the service" + what + ": errand shows the command it runs, then asks"
+	asks := "authorize the service to pages" + what + ": errand shows the command it runs, then asks"
 	if kit.Text(src["git"]) != "" && kit.Text(src["rev"]) != "" {
 		from, rev, dir := httpsURL(kit.Text(src["git"])), kit.Text(src["rev"]), kit.Text(src["dir"])
 		short, dirty := repoName(from)+" at commit "+short7(rev), src["dirty"] == true
@@ -770,7 +770,7 @@ func (l *looker) fetching(name, key string, entry map[string]any, want AskedServ
 			if err != nil {
 				return err
 			}
-			propose(uncommitted+fmt.Sprintf("With a checkout of %s that has them ( replace CHECKOUT ); declared as typed, unverified%s", l.machine, what), install(words), "")
+			propose(uncommitted+fmt.Sprintf("With a checkout of %s that has them ( replace CHECKOUT ); authorized as typed, unverified%s", l.machine, what), install(words), "")
 		case python:
 			propose(fmt.Sprintf("fetch %s into an env of its own on %s ( touches no other env )", short, l.machine), fetched, from)
 			propose(asks, install(nil), "")
@@ -785,7 +785,7 @@ func (l *looker) fetching(name, key string, entry map[string]any, want AskedServ
 			}
 			propose(fmt.Sprintf("fetch the files of %s into errand's cache on %s ( nothing in them is run )", short, l.machine),
 				fmt.Sprintf("errand serve fetch --on %s git:%s@%s%s", l.machine, from, rev, only), from)
-			propose("declare the service, run from those files"+what, install(words), "")
+			propose("authorize the service to pages, run from those files"+what, install(words), "")
 		}
 		return nil
 	}
@@ -827,11 +827,8 @@ func Look(req map[string]any, running map[string]string) map[string]any {
 	for k, v := range ObjectOf(req["paths"]) {
 		given[k] = kit.Strs(v)
 	}
-	decl, err := DeclaredServices(kit.LocalCache(), nil)
-	if err != nil { // ( a file that does not load: what it declares is not here, and that is said )
-		decl = Declarations{Services: map[string]ServiceSpec{}, Said: []string{err.Error()}}
-	}
-	l := &looker{machine: machine, given: given, cards: cardsHere(), declared: decl.Services, dev: decl.Dev, running: running, providers: providers()}
+	installed, said := PageServices()
+	l := &looker{machine: machine, given: given, cards: cardsHere(), declared: installed, dev: ReadConfig().Dev, running: running, providers: providers()}
 	services := map[string]any{}
 	for name, x := range ObjectOf(req["services"]) {
 		var want struct {
@@ -848,8 +845,8 @@ func Look(req map[string]any, running map[string]string) map[string]any {
 		services[name] = l.service(name, want.AskedService, want.DescribedBy)
 	}
 	out := map[string]any{"platform": platformName(), "cards": l.cards, "store": storeSeen(ObjectOf(req["store"])), "services": services}
-	if len(decl.Said) > 0 {
-		out["said"] = decl.Said
+	if len(said) > 0 {
+		out["said"] = said
 	}
 	return out
 }

@@ -99,7 +99,10 @@ A row can also be killed, through every layer, once confirmed.
 
 Tab `2`. Each machine of the ledger: its gauges ( CPUs, memory, cards ), measured only while shown,
 what holds it, its VMs and guests, what is kept warm, its servers: those that are held, with their address, their clients,
-their command and their journal, and, in grey, those that ran there in the last week and stopped, with why. `a` switches a machine's gauges off or on ( what
+their command and their journal, the ports kept for them ( `k` gives one back ), and, in grey, those that ran there in the last week and stopped, with why. Then what pages
+and ssh keys may ask for there ( `authorized`, its whole definition, to whom, since when, last used; `withdraw` takes it back ), and
+what they were refused lately ( `⊘` ): a page's request whose command is known there is authorized to pages in one click, after the
+whole command is shown ( [authorizations](/guide/serve#those-who-may-not-say-a-command-authorizations) ). `a` switches a machine's gauges off or on ( what
 runs there is followed all the same ), or watches a dormant one; `r` gives it a
 name, `f` forgets it until work is sent there again.
 

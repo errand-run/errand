@@ -139,48 +139,90 @@ func TestThePackagesThatDescribeServices(t *testing.T) {
 	}
 }
 
-func TestServicesInstalled(t *testing.T) {
+func TestServicesAuthorizedToPages(t *testing.T) {
 	tmp := servicePlace(t)
 	dir := aPackage(t, filepath.Join(tmp, "cache", "svc-envs", "fake"), "")
 	p := providers()[0]
 	key := "toy#" + p.gives("toy")
 	words, _ := p.compose("toy", nil, true)
-	d, err := InstallService(key, words, map[string]any{"idle": "7s"})
-	if err != nil || d["provider"] != p.file() {
-		t.Fatalf("as typed: %v %v", d, err)
+	a, err := AuthorizePage(key, words, map[string]any{"idle": "7s"})
+	if err != nil || a.Provider != p.file() || a.Unverified || len(a.Hash) != 8 {
+		t.Fatalf("as typed: %+v %v", a, err)
 	}
-	decl, err := DeclaredServices("", nil)
-	if s := decl.Services[key]; err != nil || s.Idle != 7 || s.Source != "installed" || len(s.Ports) != 1 || strings.Join(s.Command, " ") != strings.Join(words, " ") {
-		t.Errorf("declared: %+v %v", s, err)
+	all, wrong := PageServices()
+	if s := all[key]; len(wrong) > 0 || s.Idle != 7 || s.Source != "authorized" || s.Label != key || len(s.Ports) != 1 || strings.Join(s.Command, " ") != strings.Join(words, " ") {
+		t.Errorf("authorized: %+v %v", s, wrong)
 	}
-	if bad := WrongVersion(key, d["provider"]); bad != "" {
+	if s, au, err := AuthorizedTo(a.Hash, "pages"); err != nil || au.Page != key || s.Name != key {
+		t.Errorf("by its hash: %+v %+v %v", s, au, err)
+	}
+	if _, _, err := AuthorizedTo(a.Hash, "key:x"); err == nil || !strings.Contains(err.Error(), "not authorized to key:x") {
+		t.Errorf("to pages only: %v", err)
+	}
+	if bad := WrongVersion(key, a.Provider); bad != "" {
 		t.Errorf("it is what it says: %q", bad)
 	}
 	put(t, filepath.Join(dir, "toy.py"), "changed")
-	if bad := WrongVersion(key, d["provider"]); !strings.Contains(bad, "wrong version") {
+	if bad := WrongVersion(key, a.Provider); !strings.Contains(bad, "wrong version") {
 		t.Errorf("changed since: %q", bad)
 	}
-	if _, err := InstallService("toy", []string{"x"}, nil); err == nil {
+	if _, err := AuthorizePage("toy", []string{"x"}, nil); err == nil {
 		t.Errorf("a bare name")
 	}
-	if d, err = InstallService("toy#00000000", words, nil); err != nil || d["unverified"] != true || d["provider"] != nil {
-		t.Errorf("a version no package provides: %v %v", d, err)
+	if a, err = AuthorizePage("toy#00000000", words, nil); err != nil || !a.Unverified || a.Provider != "" {
+		t.Errorf("a version no package provides: %+v %v", a, err)
 	}
-	// composed from the package
+	// composed from the package; authorized again, it leads to the new definition alone
 	now := "toy#" + p.gives("toy")
 	_, needs, said, err := ComposedHere(now)
 	if err != nil || needs["idle"] != "5s" || !strings.Contains(said, "fakepkg 1.2") || !strings.Contains(said, "toy.py") {
 		t.Errorf("composed: %v %q %v", needs, said, err)
 	}
-	if d, err = InstallService(now, nil, nil); err != nil || d["idle"] != "5s" {
-		t.Errorf("the short form: %v %v", d, err)
+	if a, err = AuthorizePage(now, nil, nil); err != nil || a.Definition["idle"] != 5.0 {
+		t.Errorf("the short form: %+v %v", a, err)
 	}
-	if _, err = InstallService("drawn#"+p.gives("drawn"), nil, nil); err == nil || !strings.Contains(err.Error(), "painter") {
+	if _, err = AuthorizePage(key, append(words, "--more"), nil); err != nil || PageAuthorized()[key].Command()[len(words)] != "--more" {
+		t.Errorf("authorized again: %v", err)
+	}
+	if got, _ := Authorized(); len(got) != 3 {
+		t.Errorf("one definition per page's key: %d", len(got))
+	}
+	if _, err = AuthorizePage("drawn#"+p.gives("drawn"), nil, nil); err == nil || !strings.Contains(err.Error(), "painter") {
 		t.Errorf("a tool that is missing: %v", err)
 	}
-	// a port of its own, and what is wrong is refused before it is written
-	if _, err := DeclareHere("x", []string{"run", "{port:nope}"}, nil, "", nil); err == nil || InstalledHere(nil)["x"] != nil {
+	// a port nobody has is refused before it is written; pages only ask by NAME#VERSION
+	if _, err := AuthorizePage("x#1", []string{"run", "{port:nope}"}, nil); err == nil || PageAuthorized()["x#1"] != nil {
 		t.Errorf("a port nobody has: %v", err)
+	}
+	if _, err := Authorize(ServiceSpec{Command: []string{"run", "{port}"}}, "pages", Authorization{}); err == nil {
+		t.Errorf("pages without NAME#VERSION")
+	}
+	// taken back; what was refused, and is authorized since, is not said any more
+	Refuse(Refusal{Who: "pages", What: "late#1"})
+	Refuse(Refusal{Who: "pages", What: "late#1"})
+	if r := Refused(); len(r) != 1 || r[0].Times != 2 {
+		t.Errorf("refused, counted: %+v", r)
+	}
+	if _, err := AuthorizePage("late#1", []string{"run", "{port}"}, nil); err != nil || len(Refused()) != 0 {
+		t.Errorf("authorized since: %v %+v", err, Refused())
+	}
+	if ok, err := Withdraw(a.Hash, ""); !ok || err != nil || PageAuthorized()[now] != nil {
+		t.Errorf("withdrawn: %v %v", ok, err)
+	}
+	if st, err := os.Stat(AuthorizedFile()); err != nil || st.Mode().Perm() != 0o600 {
+		t.Errorf("for its user alone: %v %v", st, err)
+	}
+}
+
+// A definition as data is the request that asks for it: read back, the same server.
+func TestADefinitionAsData(t *testing.T) {
+	s := ServiceSpec{Command: []string{"ollama", "serve"}, Env: map[string]string{"OLLAMA_HOST": "127.0.0.1:{port}"}, Needs: map[string]any{"gpus": "1", "gpu_ram": "10G"},
+		Busy: map[string]any{"http": "/api/ps", "field": "models"}, Idle: 120, Keep: 86400, Label: "ollama", Cwd: "~/x",
+		Ports: []ServicePort{{Name: "api"}, {Name: "admin", Server: 9001}}, VersionOf: []string{"conf"}, Version: "2"}
+	b, _ := json.Marshal(Definition(s))
+	back, machine, err := ParseRequest(b)
+	if err != nil || machine != "" || back.Text() != s.Text() || back.Idle != 120 || back.Keep != 86400 || back.Label != "ollama" {
+		t.Errorf("read back: %s -> %+v %v", b, back, err)
 	}
 }
 
@@ -246,7 +288,7 @@ func TestTheDiagnosis(t *testing.T) {
 		t.Errorf("%+v", e.Lines)
 	}
 	e = lookAt(want, map[string][]string{"painter": {good}}, "drawn")
-	if e.State != "installable" || len(e.Lines) != 1 || e.Lines[0].Command != fmt.Sprintf("errand serve install --on m1 drawn#%s -- %s %s --port {port}", v, good, filepath.Join(dir, "toy.py")) {
+	if e.State != "installable" || len(e.Lines) != 1 || e.Lines[0].Command != fmt.Sprintf("errand serve authorize --to pages --on m1 drawn#%s -- %s %s --port {port}", v, good, filepath.Join(dir, "toy.py")) {
 		t.Errorf("%+v", e)
 	}
 	if !strings.HasPrefix(e.Summary, "Not set up on m1 yet.") || kit.Exists(marker) {
@@ -262,7 +304,7 @@ func TestTheDiagnosis(t *testing.T) {
 		t.Errorf("probed: %+v", e)
 	}
 	// installed: ready; changed since: not
-	if _, err := InstallService("drawn#"+v, []string{good, filepath.Join(dir, "toy.py"), "{port}"}, nil); err != nil {
+	if _, err := AuthorizePage("drawn#"+v, []string{good, filepath.Join(dir, "toy.py"), "{port}"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if e = lookAt(want, nil, "drawn"); e.State != "unavailable" && e.State != "ready" {
@@ -276,7 +318,7 @@ func TestTheDiagnosis(t *testing.T) {
 		"described": map[string]any{"run": []string{"{python}", "-c", "import shutil; shutil.rmtree( '/' )"}, "package": map[string]any{"pip": "evilpkg", "index": "https://evil.example/simple"}}}, nil, "evil")
 	all, _ := json.Marshal(e)
 	if e.State != "installable" || len(e.Lines) != 2 || !e.Lines[0].Unknown || !strings.Contains(e.Lines[0].Command, "--for evil#deadbeef pip:evilpkg==6.6") ||
-		e.Lines[1].Command != "errand serve install --on m1 evil#deadbeef" || strings.Contains(string(all), "rmtree") {
+		e.Lines[1].Command != "errand serve authorize --to pages --on m1 evil#deadbeef" || strings.Contains(string(all), "rmtree") {
 		t.Errorf("%s", all)
 	}
 	// what no line can meet
@@ -384,7 +426,7 @@ func TestDevSources(t *testing.T) {
 	put(t, filepath.Join(checkout, "svc", "toy.py"), "print( 'toy' )\n")
 	put(t, filepath.Join(checkout, "svc", describedFile), `{"format": 1, "package": {"name": "toypkg"}, "services": {"toy": {"version_of": ["toy.py"], "idle": "5s", "run": ["{python}", "{file:toy.py}", "--port", "{port}"]}}}`)
 	python := put(t, filepath.Join(env, "bin", "python"), "#!/bin/sh\n")
-	dev := map[string]devSource{"github.com/me/toyrepo": {Path: checkout, Env: env}}
+	dev := map[string]DevSource{"github.com/me/toyrepo": {Path: checkout, Env: env}}
 	want := AskedService{Version: "deadbeef", Source: map[string]any{"git": "https://github.com/me/toyrepo.git", "rev": "abc", "dir": "svc"}}
 	l := &looker{dev: dev}
 	got, err := l.devLook("toy", want)
@@ -416,7 +458,7 @@ func TestDevSources(t *testing.T) {
 	}
 	_ = os.Remove(filepath.Join(tmp, "config", "errand", devOff))
 	// a copy of a project carries those inside it
-	o := originFor(filepath.Join(tmp, "proj"), map[string]devSource{"github.com/me/toyrepo": {Path: checkout, Env: "far", Envs: map[string]string{machineName(): env}}, "github.com/x/y": {Path: tmp}})
+	o := originFor(filepath.Join(tmp, "proj"), map[string]DevSource{"github.com/me/toyrepo": {Path: checkout, Env: "far", Envs: map[string]string{machineName(): env}}, "github.com/x/y": {Path: tmp}})
 	if len(caches.ListOf(o["dev"])) != 1 {
 		t.Fatalf("%v", o)
 	}
@@ -438,16 +480,19 @@ func TestTheVersionsHere(t *testing.T) {
 	keys := []string{"toy#aaaa1111", "toy#bbbb2222", "toy#cccc3333", "toy#dddd4444"}
 	month := time.Now().Add(-30 * 24 * time.Hour)
 	for _, k := range keys {
-		if _, err := DeclareHere(k, []string{"python3", "-m", "http.server", "{port}"}, nil, "", nil); err != nil {
+		if _, err := AuthorizePage(k, []string{"python3", "-m", "http.server", "{port}"}, nil); err != nil {
 			t.Fatal(err)
 		}
 		put(t, filepath.Join(serviceEnv(k), "lib", "big"), strings.Repeat("x", 5000))
 		_ = os.Chtimes(serviceEnv(k), month, month)
 	}
-	_ = changeInstalled(func(all map[string]map[string]any) {
-		for _, k := range keys[:3] {
-			all[k]["installed"] = month.Format("2006-01-02 15:04:05")
+	_ = changeAuthorized(func(all map[string]*Authorization) error {
+		for _, a := range all {
+			if a.Page != keys[3] {
+				a.Since = month.Format(stamp)
+			}
 		}
+		return nil
 	})
 	store := filepath.Join(tmp, "s1.sviz")
 	put(t, filepath.Join(store, "services.json"), `{"format": 2, "services": {"toy": {"version": "aaaa1111", "protocol": 1, "described": {}}}}`)
@@ -470,7 +515,7 @@ func TestTheVersionsHere(t *testing.T) {
 		t.Errorf("unused: %+v", v)
 	}
 	if by[keys[3]].Unused {
-		t.Errorf("declared today: used")
+		t.Errorf("authorized today: used")
 	}
 	dry := PruneVersions(nil, VersionDays, true)
 	if got := dry["versions"].([]string); len(got) != 1 || got[0] != keys[2] || dry["freed"].(int64) < 5000 || !kit.Exists(serviceEnv(keys[2])) {
@@ -480,7 +525,7 @@ func TestTheVersionsHere(t *testing.T) {
 		t.Errorf("one that runs: %+v", v[2])
 	}
 	PruneVersions(nil, VersionDays, false)
-	if kit.Exists(serviceEnv(keys[2])) || InstalledHere(nil)[keys[2]] != nil || InstalledHere(nil)[keys[1]] == nil {
+	if kit.Exists(serviceEnv(keys[2])) || PageAuthorized()[keys[2]] != nil || PageAuthorized()[keys[1]] == nil {
 		t.Errorf("what went")
 	}
 	_ = PinVersion(keys[1], false)

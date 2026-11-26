@@ -2,7 +2,7 @@
 status: accepted
 date: 2026-11-21
 amends: 0026
-amended-by: 0028
+amended-by: 0028, 0040
 ---
 
 # A page's services run on the machine one chooses, as the installed packages describe them

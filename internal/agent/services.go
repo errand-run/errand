@@ -4,6 +4,7 @@
 package agent
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/errand-run/errand/internal/kit"
 	"github.com/errand-run/errand/internal/reach"
 	"github.com/errand-run/errand/internal/svc"
+	"github.com/errand-run/errand/internal/system"
 )
 
 // servingHere: the services the agents of this machine hold, and how each is
@@ -45,9 +47,26 @@ func (a *Place) serviceAnswer(req map[string]any) (map[string]any, error) {
 	case "compose":
 		words, needs, said, err := svc.ComposedHere(key)
 		return map[string]any{"words": words, "needs": needs, "text": said}, err
-	case "install":
-		d, err := svc.InstallService(key, kit.Strs(req["words"]), svc.ObjectOf(req["needs"]))
-		return map[string]any{"declaration": d, "file": svc.InstalledFile(nil)}, err
+	case "authorize": // a page's NAME#VERSION ( its words, else composed here ), or a server in full
+		if page := kit.Text(req["page"]); page != "" {
+			au, err := svc.AuthorizePage(page, kit.Strs(req["words"]), svc.ObjectOf(req["needs"]))
+			a.stir()
+			return map[string]any{"hash": au.Hash, "authorization": au, "file": svc.AuthorizedFile()}, err
+		}
+		var spec svc.ServiceSpec
+		if err := reach.DecodeInto(req["spec"], &spec); err != nil || len(spec.Command) == 0 {
+			return nil, errors.New("authorize: a page's NAME#VERSION, or a server in full")
+		}
+		hash, err := svc.Authorize(spec, kit.Text(req["to"]), svc.Authorization{})
+		a.stir()
+		return map[string]any{"hash": hash, "definition": svc.Definition(spec), "file": svc.AuthorizedFile()}, err
+	case "withdraw":
+		_, err := svc.Withdraw(kit.Text(req["hash"]), kit.Text(req["to"]))
+		a.stir()
+		return map[string]any{"file": svc.AuthorizedFile()}, err
+	case "authorized":
+		all, err := svc.Authorized()
+		return map[string]any{"authorized": all, "refused": svc.Refused(), "file": svc.AuthorizedFile()}, err
 	case "fetch":
 		return svc.FetchFrom(kit.Text(req["source"]), kit.Text(req["index"]), kit.Text(req["into"]), kit.Text(req["for"]), kit.Strs(req["source_ok"]))
 	case "probe":
@@ -89,7 +108,7 @@ func (a *Place) copyView(req map[string]any, f *reach.FarChan) {
 	l, err := reach.LinkTo(t, &h)
 	var root string
 	if err == nil {
-		host, _ := os.Hostname()
+		host := system.Hostname()
 		var got map[string]any
 		got, err = l.Ask(map[string]any{"op": "services_do", "req": map[string]any{"do": "copy_into", "vid": req["vid"],
 			"origin": map[string]any{"host": host, "path": req["dir"]}}})

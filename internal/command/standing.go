@@ -119,12 +119,23 @@ func statusMain(t *reach.Term, args []string) int {
 			}
 			after = append(after, "  "+s.M.Name+": "+what)
 		}
+		served := map[string]bool{}
 		for _, v := range s.Doc.Serving {
+			served[v.Config] = true
 			line := fmt.Sprintf("  %s: service %s %s  %s", s.M.Name, v.Name, v.State, v.More)
 			if s.Doc.Shared {
 				line = t.Red(line + "  ( a machine shared with others: it goes after two hours )")
 			}
 			after = append(after, line)
+		}
+		rests := 0
+		for _, l := range s.Doc.Leases {
+			if !served[l.Config] {
+				rests++
+			}
+		}
+		if rests > 0 {
+			after = append(after, fmt.Sprintf("  %s: %d port%s kept, at rest ( errand serve )", s.M.Name, rests, reach.Plural(rests)))
 		}
 		for _, v := range s.Doc.VMs {
 			after = append(after, fmt.Sprintf("  %s: %s %s", s.M.Name, v.Text, v.State))

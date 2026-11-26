@@ -26,6 +26,7 @@ import (
 	"github.com/errand-run/errand/internal/project"
 	"github.com/errand-run/errand/internal/queue"
 	"github.com/errand-run/errand/internal/runinfo"
+	"github.com/errand-run/errand/internal/system"
 	"github.com/errand-run/errand/lib"
 )
 
@@ -139,7 +140,7 @@ func registerCaches(where, view, root string) {
 	if said == nil { // written once, by the first run to use it: two paths that say one id are one directory
 		id := make([]byte, 8)
 		_, _ = rand.Read(id)
-		host, _ := os.Hostname()
+		host := system.Hostname()
 		body, _ := json.Marshal(map[string]any{"id": hex.EncodeToString(id), "host": host, "made": caches.NowIso(caches.Clock())})
 		if f, err := os.OpenFile(filepath.Join(where, caches.CachesIdent), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644); err == nil {
 			_, _ = f.Write(body)

@@ -67,10 +67,15 @@ type Place struct {
 	idleSince  time.Time
 	prunedAt   time.Time // the versions of services, last purged
 	retired    bool
-	leaving    bool                  // told to go: it answers nobody new
-	told       chan struct{}         // that it is time to
-	changed    chan struct{}         // closed, and made again, whenever something here may have changed
-	services   map[string]*service   // by name ( serve.go )
+	leaving    bool                // told to go: it answers nobody new
+	told       chan struct{}       // that it is time to
+	changed    chan struct{}       // closed, and made again, whenever something here may have changed
+	services   map[string]*service // by key ( serve.go )
+	leaseMu    sync.Mutex
+	leaseOnce  sync.Once
+	leases     map[string]*lease // by their id ( lease.go )
+	failMu     sync.Mutex
+	failed     map[string]failure    // the servers that did not start, by key
 	machinesUp map[string]*vmMachine // by their id ( vm.go )
 	wants      download.WantsBook    // what its runs ask for and have no way to ( wants.go )
 }
@@ -146,7 +151,7 @@ func (a *Place) watch(f *reach.FarChan) {
 			mu.Lock()
 			for _, more := range theirs {
 				doc.Rows, doc.Agents = append(doc.Rows, more.Rows...), append(doc.Agents, more.Agents...)
-				doc.Serving, doc.VMs = append(doc.Serving, more.Serving...), append(doc.VMs, more.VMs...)
+				doc.Serving, doc.Leases, doc.VMs = append(doc.Serving, more.Serving...), append(doc.Leases, more.Leases...), append(doc.VMs, more.VMs...)
 			}
 			mu.Unlock()
 			if time.Since(keptAt) > 15*time.Second { // ( what is asked of the system is asked less often )
@@ -156,6 +161,7 @@ func (a *Place) watch(f *reach.FarChan) {
 			doc.System, doc.User, doc.Cache = runtime.GOOS, os.Getenv("USER"), kit.LocalCache()
 			doc.Rows = onceEach(doc.Rows)
 			doc.Rested = rested(doc.Serving)
+			doc.Authorized, doc.Refused = authorizedRows()
 		}
 		handed := false // a run a batch system runs on another machine, its files on a disk they share: nothing tells
 		for _, r := range doc.Rows {
@@ -330,6 +336,7 @@ func PlaceMain(args []string) int {
 		pointHere()
 		a.retireOthers()
 		a.sweepServices()
+		a.restoreLeases()
 		if sharedHere() && a.keep.Seconds() > sharedAgent {
 			a.keep = time.Duration(sharedAgent * float64(time.Second))
 		}
@@ -455,7 +462,7 @@ func (a *Place) stopAll() {
 	for _, s := range services {
 		select {
 		case <-s.done:
-		case <-time.After(time.Duration((s.spec.Grace + 3) * float64(time.Second))):
+		case <-time.After(time.Duration((s.grace() + 3) * float64(time.Second))):
 		}
 	}
 	for _, j := range all {
@@ -574,7 +581,7 @@ func (a *Place) serve(req map[string]any, f *reach.FarChan) {
 		a.watch(f)
 	case "command":
 		a.serveCommand(req, f)
-	case "service", "service_stop", "service_list", "service_connect":
+	case "service", "service_stop", "service_list", "service_connect", "service_look", "lease", "lease_connect", "lease_yield", "lease_release":
 		a.serveService(req, f)
 	case "vm_hold", "vm_in", "vm_stop", "vm_state", "vm_install":
 		a.serveVM(req, f)
@@ -951,7 +958,7 @@ func (a *Place) pass(dir string, req map[string]any, f *reach.FarChan) {
 			}
 		}
 	}()
-	stream := map[string]bool{"follow": true, "service": true, "service_connect": true, "vm_hold": true, "vm_in": true}[kit.Text(req["op"])]
+	stream := map[string]bool{"follow": true, "service": true, "service_connect": true, "lease_connect": true, "vm_hold": true, "vm_in": true}[kit.Text(req["op"])]
 	for {
 		kind, payload, err := c.Recv()
 		if err != nil {
