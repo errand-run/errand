@@ -116,3 +116,6 @@ func MaxRSS(u *syscall.Rusage) float64 {
 	}
 	return mb
 }
+
+// Terminate: a process asked to end ( SIGTERM )
+func Terminate(pid int) { _ = syscall.Kill(pid, syscall.SIGTERM) }

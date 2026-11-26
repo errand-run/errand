@@ -26,7 +26,7 @@ errand.envs[ "odd" ] = box( cache = "$( touch pwned )/errand" )
 		t.Fatalf("in its own directory: exit %d, %q %q", o.code, o.out, o.err)
 	}
 	for _, d := range []string{"bin", "place", "copies"} {
-		if _, err := os.Stat(filepath.Join(scratch, d)); err != nil {
+		if _, err := os.Stat(filepath.Join(scratch, "main", d)); err != nil {
 			t.Errorf("not in the directory declared: %v", err)
 		}
 	}

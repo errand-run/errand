@@ -647,7 +647,6 @@ function drawDetail() {
   let tools = "";
   if (can.kill) tools += `<button class="danger" data-act="kill">${row && (row.kind == "machine" || row.kind == "broken") ? "kill all" : row && row.kind == "lease" ? "release" : "kill"}<kbd>k</kbd></button>`;
   if (can.withdraw) tools += `<button class="danger" data-act="withdraw" title="authorized to no one any more">withdraw</button>`;
-  if (can.authorize) tools += `<button data-act="authorize" title="pages that ask for it start this command there: shown in full before">authorize to pages</button>`;
   if (can.watch) tools += `<button data-act="watch">${can.watch}<kbd>a</kbd></button>`;
   for (const how of can.caches || []) tools += `<button class="danger" data-act="cache_remove" data-how="${how}">${CACHE_ACTS[how][0]}<kbd>${CACHE_ACTS[how][1]}</kbd></button>`;
   if (can.hold) tools += `<button data-act="cache_hold">this machine holds it<kbd>h</kbd></button>`;

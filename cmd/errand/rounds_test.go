@@ -18,7 +18,7 @@ func TestAnAgentStartedAgain(t *testing.T) {
 	p := newPlace(t)
 	p.errand("", "run", "-q", "true")
 	version := func() string {
-		files, _ := filepath.Glob(filepath.Join(filepath.Dir(p.root), "cache", "place", "*", "*", "version"))
+		files, _ := filepath.Glob(filepath.Join(p.cache(), "place", "*", "*", "version"))
 		if len(files) != 1 {
 			return ""
 		}
@@ -37,8 +37,9 @@ func TestAnAgentStartedAgain(t *testing.T) {
 }
 
 func TestWhatErrandLeavesIsTidied(t *testing.T) {
-	base := t.TempDir()
-	t.Setenv("ERRAND_CACHE_DIR", base)
+	dir := t.TempDir()
+	t.Setenv("ERRAND_CACHE_DIR", dir)
+	base := filepath.Join(dir, "main") // ( the instance in use )
 	long := time.Now().Add(-60 * 24 * time.Hour)
 	make := func(rel string, at time.Time) string {
 		path := filepath.Join(base, rel)
@@ -72,15 +73,15 @@ func TestTheCopiesOfAResult(t *testing.T) {
 		t.Fatalf("%q", o.err)
 	}
 	ask := func(req map[string]any) (map[string]any, error) {
-		dirs, _ := filepath.Glob(filepath.Join(filepath.Dir(p.root), "cache", "place", "*", "*"))
+		dirs, _ := filepath.Glob(filepath.Join(p.cache(), "place", "*", "*"))
 		return reach.AskAgent(dirs[0], req)
 	}
 	copied := func() []string {
-		out, _ := filepath.Glob(filepath.Join(p.far, "cache", "views", "v1*"))
+		out, _ := filepath.Glob(filepath.Join(p.farCache(), "views", "v1*"))
 		return out
 	}
 	notes := func() []string {
-		out, _ := filepath.Glob(filepath.Join(filepath.Dir(p.root), "cache", "copied", "*.json"))
+		out, _ := filepath.Glob(filepath.Join(p.cache(), "copied", "*.json"))
 		return out
 	}
 	view := filepath.Join(o.leaf, "v.sviz")
@@ -138,7 +139,7 @@ func TestTheProgramIsReplacedWhileItRuns(t *testing.T) {
 		t.Fatalf("launched: %d %q", o.code, o.err)
 	}
 	copies := func() []string {
-		out, _ := filepath.Glob(filepath.Join(base, "cache", "bin", "*", "errand"))
+		out, _ := filepath.Glob(filepath.Join(base, "cache", "main", "bin", "*", "errand"))
 		return out
 	}
 	if len(copies()) != 1 {

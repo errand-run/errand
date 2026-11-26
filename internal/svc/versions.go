@@ -1,6 +1,6 @@
 // The versions of services on this machine, what each costs, whether anything still needs it ( ADR 0028 §2 ).
 //
-// A version ( `blender#63ecc287` ) brings with it its declaration, its directory, its env, and a share of the code fetched
+// A version ( `blender~63ecc287` ) brings with it its declaration, its directory, its env, and a share of the code fetched
 // for it. It is USED when a store still present among the views registered here asks for it, when it runs, or when it ran
 // or was authorized within N days. Unused, it goes with all that is its own; fetched code goes with the last version that
 // needed it, or once nobody has needed it for N days. A pinned version stays.
@@ -59,43 +59,25 @@ func changedAt(paths ...string) float64 {
 	return last
 }
 
-// storesAsking: the views registered here whose directory is still there, by the version they ask for
-func storesAsking() map[string][]string {
-	out := map[string][]string{}
-	views := RegisteredViews()
-	for _, vid := range sortedKeys(views) {
-		dir := views[vid]
-		if !kit.IsDir(dir) {
-			continue
-		}
-		for name, want := range AskedServices(dir) {
-			if want.Version != "" {
-				out[want.Key(name)] = append(out[want.Key(name)], dir)
-			}
-		}
-	}
-	return out
-}
-
 // VersionsHere: what is here, with its sizes and uses. `running`: the services the agents of this machine hold.
 func VersionsHere(running map[string]string, sizes bool, days float64) ([]*serviceVersionHere, []*CodeHere) {
 	now := kit.Seconds(time.Now())
-	declared, asked, code := PageAuthorized(), storesAsking(), fetchedCode()
+	declared, code := PageAuthorized(), fetchedCode()
 	codeDirs := sortedKeys(code)
 	keys, envs := map[string]bool{}, map[string]string{}
 	for k := range declared {
-		keys[k] = strings.Contains(k, "#")
+		keys[k] = strings.Contains(k, "~")
 	}
 	made, _ := filepath.Glob(filepath.Join(serviceEnvsDir(), "*@*"))
 	for _, e := range made {
 		if kit.IsDir(e) {
-			k := strings.Replace(filepath.Base(e), "@", "#", 1)
+			k := strings.Replace(filepath.Base(e), "@", "~", 1)
 			envs[k], keys[k] = e, true
 		}
 	}
 	served := map[string][]string{}
 	for _, d := range ServingDirs() {
-		if strings.Contains(d.Label, "#") {
+		if strings.Contains(d.Label, "~") {
 			served[d.Label], keys[d.Label] = append(served[d.Label], d.Dir), true
 		}
 	}
@@ -105,8 +87,8 @@ func VersionsHere(running map[string]string, sizes bool, days float64) ([]*servi
 			continue
 		}
 		d := declared[k]
-		v := &serviceVersionHere{Key: k, Authorized: d != nil, Pinned: d != nil && d.Pinned, State: "left", Stores: asked[k], Env: envs[k], Code: []string{}, Whole: true}
-		v.Name, v.Version = splitKey(k)
+		v := &serviceVersionHere{Key: k, Authorized: d != nil, Pinned: d != nil && d.Pinned, State: "left", Stores: []string{}, Env: envs[k], Code: []string{}, Whole: true}
+		v.Name, v.Version, _ = SplitPageKey(k)
 		if v.Stores == nil {
 			v.Stores = []string{}
 		}
@@ -124,10 +106,10 @@ func VersionsHere(running map[string]string, sizes bool, days float64) ([]*servi
 			at := parseStamp(d.Since)
 			v.Last = max(v.Last, kit.Seconds(at))
 		}
-		for _, c := range codeDirs { // what it runs from: its provider's, or a path of its command
+		for _, c := range codeDirs { // what it runs from: a path of its command
 			words := []string{}
 			if d != nil {
-				words = append(d.Command(), d.Provider)
+				words = d.Command()
 			}
 			for _, w := range words {
 				if w == c || strings.HasPrefix(w, c+string(os.PathSeparator)) {

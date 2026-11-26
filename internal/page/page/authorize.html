@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>errand: set it up</title>
+<style>
+:root { --bg: #fbfbfa; --fg: #1d1d1b; --dim: #7a7a74; --line: #e3e2de; --pre: #f4f3f0; --acc: #0f7c8a; --ok: #1f7a3e; --wait: #a66200; --bad: #b42318; }
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #151618; --fg: #e6e5e1; --dim: #8d8c87; --line: #2a2b30; --pre: #1b1c1f; --acc: #5fc4d0; --ok: #5cc27f; --wait: #e6a23c; --bad: #f2776b; }
+}
+body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.5 system-ui, sans-serif; }
+main { max-width: 820px; margin: 0 auto; padding: 24px 16px 48px; }
+h1 { font-size: 19px; margin: 0 0 2px; } .sub { color: var(--dim); margin: 0 0 18px; }
+section { border-left: 3px solid var(--line); padding: 4px 0 6px 14px; margin: 0 0 14px; }
+section.ok { border-color: var(--ok); } section.missing { border-color: var(--wait); } section.todo { border-color: var(--acc); } section.unavailable { border-color: var(--bad); }
+h3.group { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--dim); margin: 22px 0 8px; font-weight: 600; }
+section h2 { font-size: 15px; margin: 0; display: flex; gap: 10px; align-items: baseline; }
+section h2 .st { font-size: 12px; font-weight: 500; } .ok .st { color: var(--ok); } .missing .st { color: var(--wait); } .todo .st { color: var(--acc); } .unavailable .st { color: var(--bad); }
+.todo .need { color: var(--fg); }
+.says { margin: 4px 0 0; } .says div { overflow-wrap: anywhere; }
+.need { color: var(--wait); margin-top: 4px; } .why { color: var(--bad); margin-top: 4px; }
+.note { color: var(--dim); font-size: 13px; overflow-wrap: anywhere; }
+code, pre, input[type=text] { font: 12.5px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; }
+pre { background: var(--pre); border: 1px solid var(--line); border-radius: 6px; padding: 10px; white-space: pre-wrap; word-break: break-all; margin: 6px 0 0; }
+.row { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
+input[type=text] { flex: 1; min-width: 0; padding: 5px 7px; border: 1px solid var(--line); border-radius: 5px; background: var(--bg); color: var(--fg); }
+button { font: inherit; color: inherit; background: transparent; border: 1px solid var(--line); border-radius: 6px; padding: 4px 12px; cursor: pointer; white-space: nowrap; }
+button.primary { background: var(--acc); border-color: var(--acc); color: var(--bg); font-weight: 600; padding: 7px 20px; }
+button:disabled { opacity: .45; cursor: default; }
+details { margin-top: 6px; } details summary { cursor: pointer; color: var(--dim); font-size: 13px; }
+label.trust { display: block; color: var(--bad); margin-top: 4px; }
+#run { margin-top: 4px; } #said { margin-top: 14px; } .bad { color: var(--bad); } .good { color: var(--ok); }
+</style></head>
+<body><main>
+<h1 id="title">…</h1>
+<p class="sub" id="sub"></p>
+<div id="body"><p class="note">looking at what the machine has…</p></div>
+<div id="said"></div>
+</main>
+<script type="application/json" id="asked">{asked}</script>
+<script>
+const asked = JSON.parse(document.getElementById("asked").textContent);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+const STATE = { ok: "already there", missing: "yours to say", todo: "errand sets it up, once", unavailable: "cannot be on this machine" };
+const WHEN = { ok: 0, missing: 1, unavailable: 1, todo: 2 }; // ( in time: what is there, what you say, what errand makes; then the service )
+let paths = {};
+
+async function post(verb, body) {
+  const r = await fetch("/authorize/" + verb, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...asked, paths, ...(body || {}) }) });
+  const got = await r.json().catch(() => ({ error: "errand did not answer" }));
+  if (!r.ok || got.error) throw new Error(got.error || r.statusText);
+  return got;
+}
+
+function sizeOf(n) {
+  if (typeof n !== "number") return "";
+  const u = ["B", "KB", "MB", "GB"]; let i = 0;
+  while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+  return n.toFixed(i ? 1 : 0) + " " + u[i];
+}
+
+function say(text, bad) { document.getElementById("said").innerHTML = `<p class="${bad ? "bad" : "good"}">${esc(text)}</p>`; }
+
+// one need of the service: what the machine has of it, or lacks; what can be set; what the page says of it
+function part(p, machine) {
+  let h = `<section class="${p.state}"><h2>${esc(p.title)} <span class="st">${STATE[p.state] || p.state}</span></h2>`;
+  if (p.says.length) h += `<div class="says">` + p.says.map(s => `<div>${esc(s)}</div>`).join("") + `</div>`;
+  const n = p.missing;
+  if (n) {
+    h += `<div class="need">${esc(n.what)}</div>`;
+    if (n.source && n.kind !== "store" && n.kind !== "checkout" && n.kind !== "env") h += `<div class="note">from ${esc(n.source)}${n.size ? " · " + sizeOf(n.size) : ""}${n.sha256 ? " · checked against its sha256 " + esc(n.sha256.slice(0, 12)) + "…" : ""}</div>`;
+    else if (n.size) h += `<div class="note">${sizeOf(n.size)}</div>`;
+    for (const src of (n.untrusted && n.untrusted.length ? n.untrusted : (!n.trusted && n.source ? [n.source] : [])))
+      h += `<label class="trust"><input type="checkbox" data-trust="${esc(src)}"> ${esc(src)}: a source errand does not know, named by the page. I trust it</label>`;
+  }
+  if (p.why) h += `<div class="why">${esc(p.why)}</div>`;
+  if (p.kind === "tool") {
+    for (const pr of p.probes || []) h += `<div class="row"><span class="note">${esc(pr.path)}</span><button data-probe="${esc(pr.tool)}" data-path="${esc(pr.path)}">run <code>${esc(pr.argv.slice(1).join(" "))}</code> once to read its version</button></div>`;
+    h += `<div class="row"><input type="text" data-tool="${esc(p.name)}" placeholder="another ${esc(p.name)} on ${esc(machine)}: its program's path" value="${esc((paths[p.name] || []).join(" "))}"><button data-use="${esc(p.name)}">use it</button></div>`;
+  }
+  if (p.kind === "code" && p.described && p.described.dev) {
+    h += `<div class="row"><input type="text" data-co="${esc(p.name)}" placeholder="the checkout's path on ${esc(machine)}: ~/Projects/…" value="${esc(p.path || "")}">
+      <button data-co-go="${esc(p.name)}">${p.state === "ok" ? "use this one instead" : "use this checkout"}</button></div><pre data-co-cmd="${esc(p.name)}"></pre>`;
+  }
+  if (p.described !== undefined && p.described !== null) h += `<details><summary>what the page says of it</summary><pre>${esc(JSON.stringify(p.described, null, 2))}</pre></details>`;
+  return h + `</section>`;
+}
+
+function render(got) {
+  const l = got.look, machine = got.machine;
+  document.getElementById("title").textContent = `${l.name} on ${machine}`;
+  document.getElementById("sub").textContent = (l.text ? l.text + " · " : "") + l.key;
+  let h = "";
+  if (l.state === "authorized") h += `<p class="good">Already set up on ${esc(machine)}: go back to the page and press Retry.</p>`;
+  const parts = (l.parts || []).map((p, i) => [p, i]).sort((a, b) => (WHEN[a[0].state] - WHEN[b[0].state]) || (a[1] - b[1])).map(x => x[0]);
+  h += `<h3 class="group">What it needs on ${esc(machine)}</h3>` + parts.map(p => part(p, machine)).join("");
+  const blocked = (l.parts || []).some(p => p.state === "unavailable" || p.missing && (p.missing.kind === "checkout" || (p.missing.kind === "env" && !p.missing.source)));
+  h += `<h3 class="group">Then the service, on ${esc(machine)}</h3><div id="run"><pre>${esc(got.command)}</pre>`;
+  if (l.vars && Object.keys(l.vars).length) h += `<div class="note">with ${Object.entries(l.vars).map(([k, v]) => esc(k + "=" + v)).join(" ")}</div>`;
+  h += `<details><summary>the whole description, as the page sent it</summary><pre>${esc(got.description)}</pre></details>`;
+  if (l.state !== "authorized") {
+    h += `<p style="margin-top:18px"><button class="primary" id="go" ${blocked ? "disabled" : ""}>Authorize</button>
+      <span class="note">${blocked ? "once what is yours to say is said" : "errand sets up what it is to, once; then pages that describe this service start it on " + esc(machine)}</span></p>`;
+  }
+  document.getElementById("body").innerHTML = h + `</div>`;
+
+  const go = document.getElementById("go");
+  const ticks = [...document.querySelectorAll("[data-trust]")];
+  const ready = () => { if (go && !blocked) go.disabled = ticks.some(c => !c.checked); };
+  ticks.forEach(c => c.addEventListener("change", ready)); ready();
+  if (go) go.addEventListener("click", authorize);
+  document.querySelectorAll("[data-probe]").forEach(b => b.addEventListener("click", async () => {
+    b.disabled = true;
+    try { await post("probe", { tool: b.dataset.probe, path: b.dataset.path }); await look(); } catch (e) { say(e.message, true); b.disabled = false; }
+  }));
+  document.querySelectorAll("[data-use]").forEach(b => b.addEventListener("click", () => {
+    const v = document.querySelector(`[data-tool="${CSS.escape(b.dataset.use)}"]`).value.trim();
+    if (v) paths[b.dataset.use] = [v]; else delete paths[b.dataset.use];
+    look();
+  }));
+  const q = s => /^[A-Za-z0-9_\/.~+-]+$/.test(s) ? s : "'" + s.replace(/'/g, "'\\''") + "'";
+  document.querySelectorAll("[data-co]").forEach(input => {
+    const repo = input.dataset.co, short = repo.replace(/^https?:\/\//, "").replace(/\.git$/, "");
+    const cmd = [...document.querySelectorAll("[data-co-cmd]")].find(e => e.dataset.coCmd === repo);
+    const button = [...document.querySelectorAll("[data-co-go]")].find(e => e.dataset.coGo === repo);
+    const show = () => { cmd.textContent = `errand serve dev ${short} ${q(input.value.trim() || "PATH")}`; };
+    input.addEventListener("input", show); show();
+    button.addEventListener("click", async () => {
+      button.disabled = true;
+      try { await post("checkout", { repo, path: input.value.trim() }); say(`errand knows this checkout of ${short} on ${machine}`); await look(); }
+      catch (e) { say(e.message, true); button.disabled = false; }
+    });
+  });
+}
+
+async function look() {
+  try { render(await post("look")); } catch (e) { document.getElementById("body").innerHTML = `<p class="bad">${esc(e.message)}</p>`; }
+}
+
+async function authorize() {
+  const go = document.getElementById("go");
+  go.disabled = true;
+  say("setting it up, as said above: this may take a while…");
+  const trust = [...document.querySelectorAll("[data-trust]")].filter(c => c.checked).map(c => c.dataset.trust);
+  try {
+    const got = await post("do", { trust });
+    say(got.said + ". Go back to the page and press Retry.");
+    go.remove();
+    setTimeout(() => window.close(), 2500);
+  } catch (e) { say(e.message, true); go.disabled = false; }
+}
+
+look();
+</script>
+</body></html>

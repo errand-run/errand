@@ -67,7 +67,8 @@ var verbs = []struct{ name, what, usage, options string }{
 	{"machines", "the machines errand asks what runs there", "errand machines [forget NAME… | rename NAME LABEL | watch NAME on|off|auto | gauges NAME on|off]", ""},
 	{"agents", "what is kept between commands", "errand agents [stop [NAME]] [restart] [--force]", ""},
 	{"vm", "the virtual machines kept warm between commands", "errand vm stop", ""},
-	{"serve", "a server kept while used, under the queue", "errand serve [NAME | -- CMD] | list | stop NAME | release NAME [--now] | connect HASH [PORT] | authorize --to pages|key:NAME [NAME#VERSION] [-- CMD] | authorized | withdraw HASH | dev REPOSITORY PATH | source URL | look | fetch | probe", `
+	{"instances", "the errands of this account side by side ( ERRAND_INSTANCE=NAME ), and one removed", "errand instances | errand instances remove NAME [--yes]", ""},
+	{"serve", "a server kept while used, under the queue", "errand serve [NAME | -- CMD] | list | stop NAME | release NAME [--now] | connect HASH [PORT] | authorize --to key:NAME -- CMD | authorize --to pages --spec - | authorized | withdraw HASH | dev REPOSITORY PATH | source URL | fetch | probe", `
   --gpus N --gpu-ram S --ram S --cpus N -x -n LABEL   what it needs
   --name NAME                  what it is called ( default: the label, else the command's first word )
   --port [NAME=]ANNOUNCED[:SERVER]   a port, repeated for several; empty: errand chooses, the announced side is kept for it
@@ -93,7 +94,7 @@ var verbs = []struct{ name, what, usage, options string }{
   --spec -                     the whole request, as JSON, on the standard input
   --url [PORT]                 only its URL
   -f                           stay until it stops; Ctrl-C stops it
-  --to pages|key:NAME          authorize: who may ask for it, by its hash ( a key ) or its NAME#VERSION ( a page )
+  --to pages|key:NAME          authorize: who may ask for it -- a key, by its hash; pages, by their description ( --spec - )
   --host H                     list, stop, release, connect, authorize, authorized, withdraw: on another machine`},
 	{"hold", "a claim held while stdin is open", "errand hold [--gpus N] [--gpu-ram S] [--ram S] [--cpus N] [-x] [-n LABEL]", ""},
 	{"download", "a file into the project's cache, as errand.download does", "errand download URL [--sha256 H]", ""},

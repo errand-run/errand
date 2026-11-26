@@ -39,22 +39,23 @@ const (
 
 // Record is what `launch.json` says, and `result.json` once the run ended.
 type Record struct {
-	V       int            `json:"v"`
-	Name    string         `json:"name"`
-	File    string         `json:"file,omitempty"` // relative to the root when it is under it
-	Argv    []string       `json:"argv"`
-	Date    string         `json:"date"`
-	Started float64        `json:"started"`
-	Env     string         `json:"env"`
-	Place   string         `json:"place"` // environment and machine, as in the directory's name
-	Host    string         `json:"host"`
-	Project string         `json:"project"`
-	Commit  *string        `json:"commit"`
-	Dirty   bool           `json:"dirty"`
-	Errand  string         `json:"errand"`
-	Params  map[string]any `json:"params"`
-	Tags    map[string]any `json:"tags"`
-	Label   string         `json:"label,omitempty"` // what it is called
+	V        int            `json:"v"`
+	Name     string         `json:"name"`
+	File     string         `json:"file,omitempty"` // relative to the root when it is under it
+	Argv     []string       `json:"argv"`
+	Date     string         `json:"date"`
+	Started  float64        `json:"started"`
+	Env      string         `json:"env"`
+	Place    string         `json:"place"` // environment and machine, as in the directory's name
+	Host     string         `json:"host"`
+	Project  string         `json:"project"`
+	Commit   *string        `json:"commit"`
+	Dirty    bool           `json:"dirty"`
+	Errand   string         `json:"errand"`
+	Instance string         `json:"instance,omitempty"` // the errand that ran it, when it is not the one in use ( ERRAND_INSTANCE )
+	Params   map[string]any `json:"params"`
+	Tags     map[string]any `json:"tags"`
+	Label    string         `json:"label,omitempty"` // what it is called
 	// once it ended
 	Status   string         `json:"status,omitempty"` // PASS | FAIL | SKIP
 	Error    *string        `json:"error"`

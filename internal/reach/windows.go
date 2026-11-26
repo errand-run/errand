@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/errand-run/errand/internal/kit"
+	"github.com/errand-run/errand/internal/system"
 )
 
 const WindowsCache = "C:/errand/cache"
@@ -91,10 +92,11 @@ func (h HostSpec) probeWindows() (*farInfo, error) {
 		if strings.Contains(parts[0], "%") {
 			return nil, fmt.Errorf("%s: its shell is not cmd.exe ( Windows' OpenSSH default ), or it is no Windows", h.Host)
 		}
-		i := &farInfo{V: 1, OS: "windows", Arch: strings.ToLower(parts[0]), Home: parts[1], Cache: WindowsCache}
+		i := &farInfo{V: 2, OS: "windows", Arch: strings.ToLower(parts[0]), Home: parts[1], Cache: WindowsCache}
 		if h.Cache != "" {
 			i.Cache = strings.TrimRight(strings.ReplaceAll(h.Cache, "\\", "/"), "/")
 		}
+		i.Cache += "/" + system.Instance()
 		if !h.Booted { // ( a machine that is booted is asked each time: its name leads to another tomorrow )
 			_ = os.MkdirAll(filepath.Dir(h.infoPath()), 0o755)
 			_ = kit.WriteRecord(h.infoPath(), i)
@@ -108,8 +110,8 @@ func (h HostSpec) probeWindows() (*farInfo, error) {
 }
 
 func (h HostSpec) startWindows(program string) string {
-	cache := path.Dir(path.Dir(path.Dir(program))) // <cache>/bin/<hash>/errand
-	return `set "ERRAND_CACHE_DIR=` + Backslashed(cache) + `" && "` + Backslashed(program) + `.exe" there`
+	cache := baseOf(path.Dir(path.Dir(path.Dir(program)))) // <cache>/<instance>/bin/<hash>/errand
+	return `set "ERRAND_CACHE_DIR=` + Backslashed(cache) + `" && set "ERRAND_INSTANCE=` + system.Instance() + `" && "` + Backslashed(program) + `.exe" there`
 }
 
 // shipWindows: the program sent -- written beside, then renamed

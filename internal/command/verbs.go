@@ -429,7 +429,7 @@ func agentsMain(t *reach.Term, args []string) int {
 		return 2
 	}
 	if verb == "" {
-		for _, s := range reach.Gather(t, false) {
+		for _, s := range reach.Once(reach.Gather(t, false)) {
 			switch {
 			case s.None:
 				t.Printf("  %s  dormant, not asked\n", s.M.Name)

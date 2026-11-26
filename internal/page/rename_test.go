@@ -55,3 +55,40 @@ func TestAMachineIsRenamed(t *testing.T) {
 		t.Errorf("the ledger: %+v", ms)
 	}
 }
+
+// The page: a Slurm job under the node it runs on, not under the login node that handed it, which is not counted busy.
+func TestAJobIsShownOnItsNode(t *testing.T) {
+	now := kit.Seconds(time.Now())
+	login := &UiMachine{M: reach.Machine{Name: "cinaps"}, readAt: time.Now(), doc: &reach.OverviewDoc{Host: "cinaps2", Now: now,
+		Rows: []reach.TableRow{{ID: "r1", What: "solve.py", State: "running", Slurm: "50029", Started: now}},
+		Kept: []reach.KeptRow{{Kind: "allocation", ID: "50029", On: "node14", Text: "slurm job 50029 running on node14"}}}}
+	node := &UiMachine{M: reach.Machine{Name: "node14"}, readAt: time.Now(), doc: &reach.OverviewDoc{Host: "node14", Now: now,
+		Rows: []reach.TableRow{{ID: "r1", What: "solve.py", State: "running", Started: now}},
+		Kept: []reach.KeptRow{{Kind: "allocation", ID: "50029", On: "node14", Text: "slurm job 50029 running on node14"}}}}
+	u := &Ui{machines: []*UiMachine{login, node}, ReadAt: time.Now()}
+	said := map[string]string{}
+	notes := map[string]int{}
+	for _, r := range u.machineRows(UiAsked{}) {
+		if r.Kind == "machine" {
+			said[*r.Machine] = r.Detail
+		}
+		if r.Kind == "note" {
+			notes[*r.Machine]++
+		}
+	}
+	if said["cinaps"] != "0/0" || said["node14"] != "1/0" || notes["cinaps"] != 0 || notes["node14"] != 1 {
+		t.Errorf("counts %v, allocations %v", said, notes)
+	}
+	procs := 0
+	for _, r := range u.runRows(UiAsked{}) {
+		if r.Kind == "proc" {
+			procs++
+			if *r.Machine != "node14" {
+				t.Errorf("shown on %s", *r.Machine)
+			}
+		}
+	}
+	if procs != 1 {
+		t.Errorf("%d rows of it", procs)
+	}
+}

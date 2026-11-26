@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"github.com/errand-run/errand/internal/system"
 	"os"
 	"path"
 	"path/filepath"
@@ -19,7 +20,6 @@ import (
 	"github.com/errand-run/errand/internal/kit"
 	"github.com/errand-run/errand/internal/reach"
 	"github.com/errand-run/errand/internal/runinfo"
-	"github.com/errand-run/errand/internal/svc"
 )
 
 type UiDetail struct {
@@ -519,27 +519,14 @@ func (u *Ui) facts(row *UiRow, m *UiMachine, step *stepFull) [][2]string {
 		if w.Keep > 0 {
 			line("keep", "its port stays "+reach.Span(w.Keep)+" after its last use")
 		}
+		line("does", w.Text)
 		line("from", w.Dev)
-		if w.Unverified {
-			line("unverified", "no package there gives this version: as it was typed")
-		}
 		line("since", w.Since)
 		line("used", map[bool]string{true: "never", false: w.Used}[w.Used == ""])
 		for _, who := range w.To {
 			if name, ok := strings.CutPrefix(who, "key:"); ok {
-				line("key "+name, `restrict,command="~/.cache/errand/bin/errand there --only `+who+`" …, or command="… errand serve connect `+w.Hash+`"`)
+				line("key "+name, `restrict,command="~/.cache/errand/`+system.Instance()+`/bin/errand there --only `+who+`" …, or command="… errand serve connect `+w.Hash+`"`)
 			}
-		}
-	case *reach.RefusedRow:
-		line("machine", m.Name())
-		line("asked by", w.Who)
-		line("asked for", w.What)
-		line("from", w.From)
-		line("why", w.Why)
-		line("would run", svc.Typed(w.Command))
-		line("when", reach.Span(m.now()-w.At)+" ago")
-		if w.Times > 1 {
-			line("times", fmt.Sprint(w.Times))
 		}
 	case *reach.KeptRow:
 		line("machine", m.Name())
@@ -853,10 +840,6 @@ func (u *Ui) can(row *UiRow, m *UiMachine) map[string]any {
 	switch row.Kind {
 	case "authorized":
 		out["withdraw"] = true
-	case "refused":
-		if r, ok := row.What.(*reach.RefusedRow); ok && r.Who == "pages" && len(r.Command) > 0 {
-			out["authorize"] = true
-		}
 	case "tnode", "tset", "thead", "run":
 		out["runs"] = true
 	case "cache", "cachefs":

@@ -21,7 +21,7 @@ errand.envs[ "same" ] = errand.Env( [ errand.Ssh( host = "box", root = "copy/pro
 	p.write("a.txt", "a\n")
 	there := filepath.Join(p.far, "home", "copy", "proj")
 	at := func(rel string) string { return filepath.Join(there, rel) }
-	far := filepath.Join(p.far, "cache")
+	far := p.farCache()
 	check := func(code int, words ...string) string {
 		t.Helper()
 		o := p.errand("", append([]string{"check"}, words...)...)

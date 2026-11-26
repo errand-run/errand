@@ -97,7 +97,7 @@ func (a *Place) Tidy(now time.Time) []string {
 			remove(d, "an agent that is gone")
 		}
 	}
-	base := fmt.Sprintf("/tmp/errand-%d", os.Getuid())
+	base := kit.ShortDir()
 	if st, err := os.Lstat(base); err == nil && st.IsDir() {
 		links, _ := os.ReadDir(base)
 		for _, l := range links {

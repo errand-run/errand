@@ -32,7 +32,9 @@ func TestMain(m *testing.M) {
 	}
 	built = filepath.Join(dir, "errand")
 	builtNext, builtOld = filepath.Join(dir, "next", "errand"), filepath.Join(dir, "old", "errand")
-	for program, flags := range map[string]string{built: "", builtNext: "-X github.com/errand-run/errand/internal/reach.buildMark=next", builtOld: "-X github.com/errand-run/errand/internal/reach.buildMark=old -X github.com/errand-run/errand/internal/reach.Release=0"} {
+	stamp := func(n int) string { return fmt.Sprintf(" -X github.com/errand-run/errand/internal/system.Built=%d", n) } // ( next is built after )
+	for program, flags := range map[string]string{built: stamp(1000), builtNext: "-X github.com/errand-run/errand/internal/reach.buildMark=next" + stamp(2000),
+		builtOld: "-X github.com/errand-run/errand/internal/reach.buildMark=old -X github.com/errand-run/errand/internal/reach.Release=0" + stamp(500)} {
 		if out, err := exec.Command("go", "build", "-ldflags", flags, "-o", program, ".").CombinedOutput(); err != nil {
 			panic(string(out))
 		}
@@ -337,7 +339,10 @@ func (p *scene) jobsLeft(cache string) []string {
 	return left
 }
 
-func (p *scene) cache() string { return filepath.Join(filepath.Dir(p.root), "cache") }
+// cache: errand's directory in the scene ( its instance main ); farCache: the other machine's
+func (p *scene) cache() string { return filepath.Join(filepath.Dir(p.root), "cache", "main") }
+
+func (p *scene) farCache() string { return filepath.Join(p.far, "cache", "main") }
 
 func TestAnAgentKilledLosesItsJobs(t *testing.T) {
 	p := newPlace(t)
@@ -630,7 +635,7 @@ errand.envs[ "box" ] = errand.Env( [ errand.Ssh( host = "box", root = "copy/proj
 	if _, err := os.Stat(filepath.Join(copyOf, "errand-outputs", "runs", "old")); err == nil {
 		t.Errorf("errand's outputs here were pushed: each side's are its own")
 	}
-	if left := p.jobsLeft(filepath.Join(p.far, "cache")); len(left) != 0 {
+	if left := p.jobsLeft(p.farCache()); len(left) != 0 {
 		t.Errorf("left with the agent over there: %v", left)
 	}
 
@@ -711,7 +716,7 @@ errand.envs[ "box" ] = errand.Env( [ errand.Ssh( host = "box", root = "copy/proj
 	for i := 0; i < 80 && !strings.Contains(seen.String(), "started"); i++ {
 		time.Sleep(100 * time.Millisecond)
 	}
-	_ = exec.Command("pkill", "-f", filepath.Join(p.far, "cache", "bin")+".* there").Run()
+	_ = exec.Command("pkill", "-f", filepath.Join(p.farCache(), "bin")+".* there").Run()
 	if err := run.Wait(); err == nil || !strings.Contains(said.String(), "The run goes on if it was running") {
 		t.Errorf("a connection lost: %v, %q", err, said.String())
 	}
@@ -810,11 +815,14 @@ func TestAnUpdateIsARelay(t *testing.T) {
 		t.Errorf("left with this machine's agents: %v", left)
 	}
 
-	// stopped through the new agent, too
+	// the program before, called again, uses the agent in place: it does not take the place back ( ADR 0035, 2026-11-26 )
 	_ = os.Remove(gate)
 	p.program = ""
 	o = p.errand("", "run", "--batch", "-q", "long.sh")
 	id = strings.Fields(o.out + " x")[0]
+	if n := agents(); n != 1 {
+		t.Errorf("%d agents live: the program before started its own again", n)
+	}
 	p.program = builtNext
 	if o = p.errand("", "run", "-q", "true"); o.code != 0 {
 		t.Fatalf("exit %d, %q", o.code, o.err)
@@ -1012,7 +1020,7 @@ errand.envs[ "box" ] = errand.Env( [ errand.Ssh( host = "box", root = "copy/proj
 		t.Errorf("a second run: exit %d, %q", o.code, o.err)
 	}
 	// ... nor by a push that walks the copy again ( its agent gone, another started: the copy is looked at whole )
-	_ = exec.Command("pkill", "-f", filepath.Join(p.far, "cache", "place")).Run()
+	_ = exec.Command("pkill", "-f", filepath.Join(p.farCache(), "place")).Run()
 	time.Sleep(300 * time.Millisecond)
 	p.write("job.py", "pass # changed\n")
 	if o = p.errand("", "run", "--env", "box", "job.py"); o.code != 0 || strings.Contains(o.err, "bringing") || strings.Contains(o.err, "moved aside") {
@@ -2413,7 +2421,7 @@ errand.envs[ "box" ] = errand.Env( [ errand.Ssh( host = "box", root = "copy/proj
 				}
 			}
 			hash, _ := kit.HashOfFile(built) // ( the copy its agent runs from )
-			program := filepath.Join(filepath.Dir(p.root), "cache", "bin", hash)
+			program := filepath.Join(p.cache(), "bin", hash)
 			if !strings.Contains(entered, program+":"+program) {
 				t.Errorf("errand's program is not seen from inside: %q", entered)
 			}

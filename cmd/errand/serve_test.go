@@ -646,7 +646,7 @@ func TestAPortOutlivesItsAgent(t *testing.T) {
 	if got := get(t, url+"/c"); !strings.Contains(got, `"path": "/c"`) {
 		t.Errorf("and goes on: %q", got)
 	}
-	_ = exec.Command("pkill", "-9", "-f", filepath.Join(filepath.Dir(p.root), "cache", "bin")).Run()
+	_ = exec.Command("pkill", "-9", "-f", filepath.Join(p.cache(), "bin")).Run()
 	time.Sleep(300 * time.Millisecond)
 	if got := get(t, url); !strings.HasPrefix(got, "no answer") {
 		t.Errorf("its agents were killed: %q", got)
@@ -695,7 +695,7 @@ far = errand.serve( [ "python3", srv, "{port}", log ], on = [ "box", errand.Vars
 print( far.wait().call( ask, "/far" ) )
 for one in s, bad, far: one.release( now = True )
 `)
-	cmd := exec.Command("python3", "ask.py", srv, log, filepath.Join(filepath.Dir(p.root), "cache", "bin"))
+	cmd := exec.Command("python3", "ask.py", srv, log, filepath.Join(p.cache(), "bin"))
 	cmd.Dir, cmd.Env = p.root, append(append([]string{}, p.env...), "PYTHONPATH="+lib, "ERRAND="+built)
 	var errs strings.Builder
 	cmd.Stderr = &errs
@@ -813,8 +813,8 @@ func TestAServerAuthorizedToAKey(t *testing.T) {
 	if !strings.Contains(answer, `"path": "/only"`) || kit.Exists(log+".evil") {
 		t.Errorf("its server, and nothing that was added: %q", answer)
 	}
-	if o := p.errand("", "serve", "authorized"); !strings.Contains(o.out, "key:boucles asked for "+other) {
-		t.Errorf("what was refused is said: %q", o.out)
+	if o := p.errand("", "serve", "authorized"); strings.Contains(o.out, "refused") || strings.Contains(o.out, "asked for") {
+		t.Errorf("what was refused is kept nowhere ( ADR 0041 ): %q", o.out)
 	}
 
 	// taken back
@@ -899,7 +899,7 @@ func TestAPortAlwaysListenedOn(t *testing.T) {
 	if got := get(t, url+"/a"); !strings.Contains(got, `"path": "/a"`) {
 		t.Fatalf("it answers, through the system: %q", got)
 	}
-	_ = exec.Command("pkill", "-9", "-f", filepath.Join(filepath.Dir(p.root), "cache", "bin")).Run()
+	_ = exec.Command("pkill", "-9", "-f", filepath.Join(p.cache(), "bin")).Run()
 	time.Sleep(300 * time.Millisecond)
 	if got := get(t, url+"/b"); !strings.Contains(got, `"path": "/b"`) {
 		t.Errorf("its agents were killed, and nothing was asked of errand: %q", got)
@@ -944,7 +944,7 @@ try { await serve( [ "nosuchprogram" ] ).url(); } catch ( err ) { console.log( e
 try { serve( [ "x" ], { gpu: 1 } ); } catch ( err ) { console.log( err.message ); }
 for ( const one of [ s, bad ] ) await one.release( { now: true } );
 `)
-	cmd := exec.Command(node, "ask.mjs", srv, log, filepath.Join(filepath.Dir(p.root), "cache", "bin"))
+	cmd := exec.Command(node, "ask.mjs", srv, log, filepath.Join(p.cache(), "bin"))
 	cmd.Dir, cmd.Env = p.root, append(append([]string{}, p.env...), "ERRAND="+built)
 	var errs strings.Builder
 	cmd.Stderr = &errs

@@ -11,8 +11,9 @@
 //	<queue>/lock                 held only while deciding, never while working
 //
 // The directory is per user and per host ( a home shared over NFS must not merge two machines ). Requests are served
-// first come, first served: whatever arrives after a request that waits, waits behind it -- a steady stream of small
-// work never starves a benchmark. A claim that grows is ahead of any new request.
+// first come, first served, for what they wait for ( ADR 0042 ): what a request that waits asked is kept for it, and a
+// later one passes it only with what is left -- a test that takes no card passes a run that waits for one, while a
+// steady stream of small work never starves a benchmark. A claim that grows is ahead of any new request.
 //
 // A claim lives as long as its holder. Who holds one is known by its process ( its id and when it started, where the
 // two can be seen from here ) and by a heartbeat on its file: a holder that was killed gives the machine back at
@@ -25,6 +26,7 @@
 package queue
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -429,19 +431,8 @@ func g(f float64) string { return strconv.FormatFloat(f, 'g', -1, 64) }
 // fits: why `needs` must wait ( "" when it fits ), and the cards it gets. `ahead`: the requests queued before this
 // one, and the claims that grow. `keep`: the cards a growing claim already has, given first when they still fit.
 func (q *Queue) fits(needs Needs, exclusive bool, others, ahead []Claim, keep []int) (string, []int) {
-	if len(ahead) > 0 {
-		first := ahead[0]
-		why := "its turn"
-		if first.Grows {
-			why = "more than it holds"
-		} else if first.Exclusive {
-			why = "the machine to itself"
-		}
-		more := ""
-		if len(ahead) > 1 {
-			more = fmt.Sprintf(" ( %d ahead )", len(ahead))
-		}
-		return fmt.Sprintf("%s, which is waiting for %s%s", label(first), why, more), nil
+	if why := q.behind(needs, exclusive, others, ahead); why != "" {
+		return why, nil
 	}
 	if exclusive && len(others) > 0 {
 		return fmt.Sprintf("the machine to itself (%d running)", len(others)), nil
@@ -537,6 +528,98 @@ func (q *Queue) fits(needs Needs, exclusive bool, others, ahead []Claim, keep []
 		return fmt.Sprintf("gpus (%d free of %d, needs %d%s)", len(got), len(all), needs.GPUs, how), nil
 	}
 	return "", got[:needs.GPUs]
+}
+
+// usesCards: whether what is asked takes a card -- never on a machine that has none
+func (q *Queue) usesCards(n Needs) bool { return q.Cap.GPUs > 0 && (n.GPUs > 0 || !n.GPURam.IsZero()) }
+
+// alone: what only runs with nothing beside it -- the machine to itself, or more of something than it has
+func (q *Queue) alone(n Needs, exclusive bool) bool {
+	return exclusive || (q.Cap.CPUs > 0 && n.CPUs > q.Cap.CPUs) || (q.Cap.RAM > 0 && n.RAM > q.Cap.RAM) ||
+		(q.Cap.GPUs > 0 && n.GPUs > q.Cap.GPUs)
+}
+
+// reserved: what a request that waits keeps for itself while it waits -- what it asked, or, for a claim that grows,
+// what it asks on top of what it holds. cards: whether that is a card ( more of them, or more of their memory ).
+func (q *Queue) reserved(w Claim, others []Claim) (more Needs, cards, alone bool) {
+	if !w.Grows {
+		return w.Needs, q.usesCards(w.Needs), q.alone(w.Needs, w.Exclusive)
+	}
+	if w.Want == nil {
+		return Needs{}, false, w.Exclusive
+	}
+	want, held := *w.Want, Needs{}
+	for _, o := range others {
+		if idOf(o.Path) == w.Of {
+			held = o.Needs
+		}
+	}
+	more = Needs{CPUs: max(want.CPUs-held.CPUs, 0), RAM: max(want.RAM-held.RAM, 0)}
+	cards = q.usesCards(want) && (want.GPUs > held.GPUs || want.GPURam != held.GPURam)
+	return more, cards, q.alone(want, w.Exclusive)
+}
+
+// behind: why `needs` waits for requests ahead of it ( "" when it takes nothing they wait for ). `ahead` is in
+// order. Those ahead keep their place: what they asked is counted as taken already, so a later request passes one
+// only with what that one would not have had anyway. A test that takes no card passes a run that waits for one; a
+// stream of small runs never starves a benchmark, nor a run waiting for a card, nor a claim that grows.
+func (q *Queue) behind(needs Needs, exclusive bool, others, ahead []Claim) string {
+	mine, whole := q.usesCards(needs), q.alone(needs, exclusive)
+	why := make([]string, len(ahead)) // what this one would take from each request ahead, "" for nothing
+	var takesCPU, takesRAM []int
+	resCPU := sum(others, func(c Claim) float64 { return c.CPUs })
+	resRAM := sum(others, func(c Claim) float64 { return c.RAM })
+	for i, w := range ahead {
+		more, cards, alone := q.reserved(w, others)
+		switch {
+		case alone:
+			why[i] = "the machine to itself"
+		case whole:
+			why[i] = "its turn" // this one takes everything: whatever is ahead goes first
+		case mine && cards:
+			why[i] = "a card too"
+		}
+		if more.CPUs > 0 {
+			resCPU += more.CPUs
+			takesCPU = append(takesCPU, i)
+		}
+		if more.RAM > 0 {
+			resRAM += more.RAM
+			takesRAM = append(takesRAM, i)
+		}
+	}
+	// cpus and memory are counted: it waits only when what those ahead asked leaves too little of them
+	if needs.CPUs > 0 && q.Cap.CPUs > 0 && resCPU+needs.CPUs > q.Cap.CPUs {
+		for _, i := range takesCPU {
+			why[i] = cmp.Or(why[i], "cpus too")
+		}
+	}
+	if needs.RAM > 0 && q.Cap.RAM > 0 && resRAM+needs.RAM > q.Cap.RAM {
+		for _, i := range takesRAM {
+			why[i] = cmp.Or(why[i], "ram too")
+		}
+	}
+	named, count := -1, 0
+	for i, w := range why {
+		if w != "" {
+			if named < 0 {
+				named = i // the first of them
+			}
+			count++
+		}
+	}
+	if count == 0 {
+		return ""
+	}
+	first, reason := ahead[named], why[named]
+	if first.Grows {
+		reason = "more than it holds"
+	}
+	more := ""
+	if count > 1 {
+		more = fmt.Sprintf(" ( %d ahead )", count)
+	}
+	return fmt.Sprintf("%s, which is waiting for %s%s", label(first), reason, more)
 }
 
 func sum(cs []Claim, of func(Claim) float64) float64 {

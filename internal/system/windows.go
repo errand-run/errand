@@ -195,3 +195,10 @@ func MaxRSS(u *syscall.Rusage) float64 { return 0 }
 
 // AwaitNoReader: it cannot be told here: what is written says it, when it is refused
 func AwaitNoReader(f *os.File) bool { return false }
+
+// Terminate: a process made to end
+func Terminate(pid int) {
+	if p, err := os.FindProcess(pid); err == nil {
+		_ = p.Kill()
+	}
+}

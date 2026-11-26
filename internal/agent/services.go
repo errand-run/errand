@@ -1,9 +1,10 @@
-// What a machine has for the services a page asks for, and what a person typed for it ( ADR 0026, 0027, 0028 ): asked of the
-// agent of that machine -- `svc/packages.go`, `svc/fetch.go`, `svc/diagnose.go`, `svc/devsource.go`, `svc/versions.go` --, and its command line.
+// What a machine has for a page's service, and what a person authorized or typed for it ( ADR 0027, 0028, 0041 ): asked of the
+// agent of that machine -- `svc/pagedesc.go`, `svc/fetch.go`, `svc/diagnose.go`, `svc/versions.go` --, and of its command line.
 
 package agent
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -38,24 +39,33 @@ func (a *Place) servicesDo(req map[string]any, f *reach.FarChan) {
 func (a *Place) serviceAnswer(req map[string]any) (map[string]any, error) {
 	key := kit.Text(req["key"])
 	switch kit.Text(req["do"]) {
-	case "look":
-		return svc.Look(req, a.servingHere()), nil
+	case "page_look": // what this machine has for a page's description, and lacks ( ADR 0041 )
+		d, err := pageDesc(req)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"look": svc.LookPage(d, pathsOf(req), svc.ObjectOf(req["store"]))}, nil
+	case "dev_declare": // a checkout stands for a repository here ( a person said so, in errand's page )
+		return map[string]any{"ok": true}, svc.DeclareCheckout(kit.Text(req["repo"]), kit.Text(req["path"]), kit.Text(req["env"]))
+	case "store_seen": // where this machine sees a view's files
+		return map[string]any{"path": svc.StoreSeen(svc.ObjectOf(req["store"]))}, nil
 	case "copy_into": // where a view's copy goes here, and whose it is
 		return svc.ViewInto(kit.Text(req["vid"]), svc.ObjectOf(req["origin"]))
 	case "copies_remove":
 		return svc.RemoveViews(kit.Strs(req["vids"])), nil
-	case "compose":
-		words, needs, said, err := svc.ComposedHere(key)
-		return map[string]any{"words": words, "needs": needs, "text": said}, err
-	case "authorize": // a page's NAME#VERSION ( its words, else composed here ), or a server in full
-		if page := kit.Text(req["page"]); page != "" {
-			au, err := svc.AuthorizePage(page, kit.Strs(req["words"]), svc.ObjectOf(req["needs"]))
+	case "authorize": // a page's description, or a server in full
+		if req["described"] != nil {
+			d, err := pageDesc(req)
+			if err != nil {
+				return nil, err
+			}
+			l, err := svc.AuthorizePage(d, pathsOf(req), kit.Strs(req["source_ok"]), func(string) {})
 			a.stir()
-			return map[string]any{"hash": au.Hash, "authorization": au, "file": svc.AuthorizedFile()}, err
+			return map[string]any{"look": l, "file": svc.AuthorizedFile()}, err
 		}
 		var spec svc.ServiceSpec
 		if err := reach.DecodeInto(req["spec"], &spec); err != nil || len(spec.Command) == 0 {
-			return nil, errors.New("authorize: a page's NAME#VERSION, or a server in full")
+			return nil, errors.New("authorize: a page's description, or a server in full")
 		}
 		hash, err := svc.Authorize(spec, kit.Text(req["to"]), svc.Authorization{})
 		a.stir()
@@ -66,18 +76,11 @@ func (a *Place) serviceAnswer(req map[string]any) (map[string]any, error) {
 		return map[string]any{"file": svc.AuthorizedFile()}, err
 	case "authorized":
 		all, err := svc.Authorized()
-		return map[string]any{"authorized": all, "refused": svc.Refused(), "file": svc.AuthorizedFile()}, err
+		return map[string]any{"authorized": all, "file": svc.AuthorizedFile()}, err
 	case "fetch":
 		return svc.FetchFrom(kit.Text(req["source"]), kit.Text(req["index"]), kit.Text(req["into"]), kit.Text(req["for"]), kit.Strs(req["source_ok"]))
 	case "probe":
 		return svc.ProbeProgram(kit.Strs(req["argv"]))
-	case "dev_ensure":
-		var want svc.AskedService
-		if err := reach.DecodeInto(req["want"], &want); err != nil {
-			return nil, err
-		}
-		key, err := a.devEnsure(kit.Text(req["name"]), want)
-		return map[string]any{"key": key}, err
 	case "versions":
 		versions, code := svc.VersionsHere(a.servingHere(), true, svc.VersionDays)
 		return map[string]any{"versions": versions, "code": code, "days": svc.VersionDays}, nil
@@ -87,6 +90,22 @@ func (a *Place) serviceAnswer(req map[string]any) (map[string]any, error) {
 		return svc.PruneVersions(a.servingHere(), kit.Num(req["unused"], svc.VersionDays), req["dry_run"] == true), nil
 	}
 	return nil, fmt.Errorf("%q is nothing the services of a machine are asked", kit.Text(req["do"]))
+}
+
+// pageDesc: the description a request carries
+func pageDesc(req map[string]any) (svc.PageDesc, error) {
+	b, _ := json.Marshal(req["described"])
+	d, _, err := svc.ParsePageDesc(b)
+	return d, err
+}
+
+// pathsOf: the places a person gave for a description's tools
+func pathsOf(req map[string]any) map[string][]string {
+	out := map[string][]string{}
+	for tool, x := range svc.ObjectOf(req["paths"]) {
+		out[tool] = kit.Strs(x)
+	}
+	return out
 }
 
 // copyView: a view's files, pushed into errand's cache on another machine

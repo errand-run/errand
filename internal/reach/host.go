@@ -219,7 +219,7 @@ func (h HostSpec) infoPath() string { return filepath.Join(kit.LocalCache(), "ho
 func (h HostSpec) known() *farInfo {
 	var i farInfo
 	data, err := os.ReadFile(h.infoPath())
-	if err != nil || json.Unmarshal(data, &i) != nil || i.V != 1 || i.OS == "" {
+	if err != nil || json.Unmarshal(data, &i) != nil || i.V != 2 || i.OS == "" { // ( 2: the directory of this instance, ADR 0035 2026-11-26 )
 		return nil
 	}
 	return &i
@@ -270,16 +270,16 @@ func (h HostSpec) probe() (*farInfo, error) {
 	if h.Windows {
 		return h.probeWindows()
 	}
-	cache, ready := `"${ERRAND_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/errand}"`, ""
-	if h.Cache != "" { // declared: made if it is not there, and as it is, links followed
+	ready := system.CacheShell(`"${ERRAND_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/errand}"`) // ( $c: this instance's directory there )
+	if h.Cache != "" {                                                                          // declared: made if it is not there, and as it is, links followed
 		at, err := declaredPath(h.Cache)
 		if err != nil {
 			return nil, fmt.Errorf("%s: %v", h.Host, err)
 		}
-		ready = "c=" + at + "; if mkdir -p \"$c\" && [ -w \"$c\" ]; then c=$( cd \"$c\" && pwd -P ); else printf '\n" + noCacheMark + "%s|\n' \"$c\"; exit 1; fi; "
-		cache = `"$c"`
+		ready = "c=" + at + "; if mkdir -p \"$c\" && [ -w \"$c\" ]; then c=$( cd \"$c\" && pwd -P ); else printf '\n" + noCacheMark + "%s|\n' \"$c\"; exit 1; fi; " +
+			system.CacheShell(`"$c"`)
 	}
-	script := ready + `printf '\n` + probeMark + `%s|%s|%s|%s|\n' "$(uname -s)" "$(uname -m)" "$HOME" ` + cache
+	script := ready + `printf '\n` + probeMark + `%s|%s|%s|%s|\n' "$(uname -s)" "$(uname -m)" "$HOME" "$c"`
 	argv := append(h.argv(), throughShell(script))
 	cmd := h.command(argv)
 	var out, said bytes.Buffer
@@ -304,7 +304,7 @@ func (h HostSpec) probe() (*farInfo, error) {
 			if len(parts) < 4 {
 				break
 			}
-			i := &farInfo{V: 1, OS: strings.ToLower(parts[0]), Home: parts[2], Cache: parts[3]}
+			i := &farInfo{V: 2, OS: strings.ToLower(parts[0]), Home: parts[2], Cache: parts[3]}
 			switch strings.ToLower(parts[1]) {
 			case "x86_64", "amd64":
 				i.Arch = "amd64"
@@ -382,6 +382,24 @@ func (h HostSpec) ship(local, dir string, i *farInfo) error {
 
 // ── the link ─────────────────────────────────────────────────────────────────
 
+// baseOf: where an instance's directory is, from that directory ( the directory of before instances: itself )
+func baseOf(dir string) string {
+	if path.Base(dir) == system.Instance() {
+		return path.Dir(dir)
+	}
+	return dir
+}
+
+// instanceSaid: what tells errand started over there which errand it is: where its directory is, when it was declared, and
+// its instance, when it is not main -- from that instance's directory there
+func (h HostSpec) instanceSaid(dir string) string {
+	out := h.cacheSaid(baseOf(dir))
+	if inst := system.Instance(); inst != "main" {
+		out += "export ERRAND_INSTANCE=" + inst + "; "
+	}
+	return out
+}
+
 // cacheSaid: what tells the program started there where errand's directory is, when that was declared -- and, by it, its agent
 // and what the agent starts
 func (h HostSpec) cacheSaid(cache string) string {
@@ -400,7 +418,7 @@ func (h HostSpec) start(program string) (*Link, int, string) {
 			said_ = "export ERRAND_SHARED=1; "
 		}
 	}
-	said_ += h.cacheSaid(path.Dir(path.Dir(path.Dir(program)))) // ( <cache>/bin/<hash>/errand )
+	said_ += h.instanceSaid(path.Dir(path.Dir(path.Dir(program)))) // ( <cache>/bin/<hash>/errand )
 	argv := append(h.argv(), "$SHELL -ic "+layer.Quote(said_+"exec "+layer.Quote(program)+" there"))
 	if h.Windows {
 		argv = append(h.argv(), h.startWindows(program))

@@ -380,7 +380,7 @@ func listenFor(addr, id string, p svc.ServicePort, had int, taken map[int]string
 
 // ── always: the system listens in errand's stead ( ADR 0028 §6 ) ─────────────
 
-func keptLabel(id, port string) string { return "dev.errand.lease." + id + "." + port }
+func keptLabel(id, port string) string { return units.Label("lease." + id + "." + port) }
 
 // keepFor: a port of a lease the system listens on, and starts `errand serve kept-lease` for at a connection -- the number it
 // has, else one found as any other

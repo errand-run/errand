@@ -30,7 +30,7 @@ errand.envs[ "box" ] = errand.Env( [ errand.Ssh( host = "box", root = "copy/proj
 	}
 	gone := func(rel string) bool { _, err := os.Lstat(at(rel)); return err != nil }
 	walked := func() { // the agent over there gone: the next one looks at the whole copy
-		_ = exec.Command("pkill", "-f", filepath.Join(p.far, "cache", "place")).Run()
+		_ = exec.Command("pkill", "-f", filepath.Join(p.farCache(), "place")).Run()
 		time.Sleep(300 * time.Millisecond)
 	}
 	run := func(more ...string) outcome {
@@ -199,7 +199,7 @@ func TestAPushThatIsCut(t *testing.T) {
 			break
 		}
 	}
-	_ = exec.Command("pkill", "-9", "-f", filepath.Join(p.far, "cache", "place")).Run()
+	_ = exec.Command("pkill", "-9", "-f", filepath.Join(p.farCache(), "place")).Run()
 	_ = cmd.Wait()
 	_ = os.Remove(filepath.Join(there, ".errand-copy.lock"))
 	if _, err := os.Stat(filepath.Join(there, ".errand-copy")); err == nil {

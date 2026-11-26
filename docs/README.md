@@ -37,5 +37,10 @@ Pages that make a claim about a flag or an argument should be checked against `c
 
 ## Publishing
 
-`.github/workflows/docs.yml` builds and deploys on every push to `main` that touches `docs/`. Pages
-has to be switched to "GitHub Actions" as its source once, in the repository's settings.
+```bash
+make site-publish  # from the root of the project
+```
+
+It builds the site and sends it to the branch `gh-pages`, which holds that one commit: each publication replaces the
+previous one. What is built is `docs/` as it is on disk, committed or not. In the repository's settings, the source of
+Pages has to be "Deploy from a branch", `gh-pages`, `/ (root)`.

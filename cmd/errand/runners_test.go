@@ -113,7 +113,7 @@ if test( "elsewhere" ):
 			t.Fatalf("on another machine: exit %d %+v\n%s%s", o.code, o.result, o.out, o.err)
 		}
 	}
-	if made, _ := filepath.Glob(filepath.Join(p.far, "cache", "binding", "*", "errand", "held.py")); len(made) != 1 {
+	if made, _ := filepath.Glob(filepath.Join(p.farCache(), "binding", "*", "errand", "held.py")); len(made) != 1 {
 		t.Errorf("errand's Python over there, once: %q", made)
 	}
 	// a file that will not be read costs itself

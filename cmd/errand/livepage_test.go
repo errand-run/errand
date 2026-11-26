@@ -66,7 +66,7 @@ echo said-at-last
 		return key != ""
 	})
 	// its page, by its place here: before it has come back
-	notes, _ := filepath.Glob(filepath.Join(p.root, "..", "cache", "runs", "*.json"))
+	notes, _ := filepath.Glob(filepath.Join(p.cache(), "runs", "*.json"))
 	if len(notes) != 1 {
 		t.Fatalf("its note: %v", notes)
 	}

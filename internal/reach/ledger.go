@@ -89,7 +89,7 @@ func (h HostSpec) There(words ...string) ([]byte, error) {
 		}
 	}
 	// this errand, else the newest of those that were sent there
-	line := h.cacheSaid(info.Cache) + "p=" + ShellQuote(program) + "; [ -x \"$p\" ] || p=$(ls -t " + ShellQuote(info.Cache+"/bin") + "/*/errand 2>/dev/null | head -1); [ -x \"$p\" ] || exit 0; exec \"$p\""
+	line := h.instanceSaid(info.Cache) + "p=" + ShellQuote(program) + "; [ -x \"$p\" ] || p=$(ls -t " + ShellQuote(info.Cache+"/bin") + "/*/errand 2>/dev/null | head -1); [ -x \"$p\" ] || exit 0; exec \"$p\""
 	for _, w := range words {
 		line += " " + ShellQuote(w)
 	}
@@ -135,6 +135,35 @@ func Gather(t *Term, all bool) []machineSaid {
 	}
 	wg.Wait()
 	return out
+}
+
+// Once: what the machines said, a run or an allocation said by the machine it runs on only ( Elsewhere )
+func Once(said []machineSaid) []machineSaid {
+	docs := make([]*OverviewDoc, len(said))
+	for i := range said {
+		if !said[i].None && said[i].Err == nil {
+			docs[i] = &said[i].Doc
+		}
+	}
+	for i, skip := range Elsewhere(docs) {
+		if len(skip) == 0 {
+			continue
+		}
+		d := &said[i].Doc
+		rows, kept := []TableRow{}, []KeptRow{}
+		for _, r := range d.Rows {
+			if !skip["run:"+r.ID] {
+				rows = append(rows, r)
+			}
+		}
+		for _, k := range d.Kept {
+			if k.Kind != "allocation" || !skip["alloc:"+k.ID] {
+				kept = append(kept, k)
+			}
+		}
+		d.Rows, d.Kept = rows, kept
+	}
+	return said
 }
 
 // MachinesMain: `errand machines [forget|rename|watch|gauges]`

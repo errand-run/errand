@@ -46,7 +46,7 @@ func TestACopyRemovedByHand(t *testing.T) {
 			id := strings.Fields(o.out)[0]
 			time.Sleep(1500 * time.Millisecond)
 			if !alive {
-				_ = exec.Command("pkill", "-f", filepath.Join(p.far, "cache", "place")).Run()
+				_ = exec.Command("pkill", "-f", filepath.Join(p.farCache(), "place")).Run()
 				time.Sleep(300 * time.Millisecond)
 			}
 			if err := os.RemoveAll(there); err != nil {

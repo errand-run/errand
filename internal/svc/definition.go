@@ -8,8 +8,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -66,6 +69,16 @@ func (s ServiceSpec) hash(read bool) (string, error) {
 		} else if !filepath.IsAbs(at) {
 			at = filepath.Join(s.Dir(), at)
 		}
+		if strings.Contains(at, "*") { // a pattern: what it names now, by date and size ( read at each look: cheap )
+			var said []string
+			for _, m := range globAll(at) {
+				if st, err := os.Stat(m); err == nil {
+					said = append(said, fmt.Sprintf("%s:%d:%d", m, st.Size(), st.ModTime().UnixNano()))
+				}
+			}
+			files[f] = Short(strings.Join(said, "\n"))
+			continue
+		}
 		sum, err := kit.HashOfFile(at)
 		if err != nil {
 			return "", fmt.Errorf("version_of: %v", err)
@@ -78,6 +91,58 @@ func (s ServiceSpec) hash(read bool) (string, error) {
 		return "", err
 	}
 	return Short(string(b)), nil
+}
+
+// globAll: the files a pattern names, `**` any depth of directories ( .git, __pycache__, node_modules left out ), in order
+func globAll(pattern string) []string {
+	parts := strings.Split(filepath.ToSlash(pattern), "/")
+	base := 0
+	for base < len(parts) && !strings.ContainsAny(parts[base], "*?[") {
+		base++
+	}
+	root := filepath.FromSlash(strings.Join(parts[:base], "/"))
+	if root == "" {
+		root = "/"
+	}
+	rest := parts[base:]
+	var out []string
+	_ = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			if n := d.Name(); p != root && (n == ".git" || n == "__pycache__" || n == "node_modules") {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		rel, err := filepath.Rel(root, p)
+		if err == nil && matchSegments(rest, strings.Split(filepath.ToSlash(rel), "/")) {
+			out = append(out, p)
+		}
+		return nil
+	})
+	sort.Strings(out)
+	return out
+}
+
+func matchSegments(pattern, name []string) bool {
+	if len(pattern) == 0 {
+		return len(name) == 0
+	}
+	if pattern[0] == "**" {
+		for i := 0; i <= len(name); i++ {
+			if matchSegments(pattern[1:], name[i:]) {
+				return true
+			}
+		}
+		return false
+	}
+	if len(name) == 0 {
+		return false
+	}
+	ok, _ := path.Match(pattern[0], name[0])
+	return ok && matchSegments(pattern[1:], name[1:])
 }
 
 // written: its directory -- as it is said, where the home is another machine's
@@ -145,15 +210,31 @@ func (s ServiceSpec) Program(environ []string) (string, string, error) {
 func (s ServiceSpec) TooMuch(c queue.Capacity) string {
 	n := s.Asks().Normalized(1)
 	number := func(f float64) string { return strconv.FormatFloat(f, 'f', -1, 64) }
+	some := func(n int, one string) string {
+		switch n {
+		case 0:
+			return "none"
+		case 1:
+			return "1 " + one
+		}
+		return fmt.Sprintf("%d %ss", n, one)
+	}
 	switch {
 	case n.CPUs > c.CPUs:
-		return fmt.Sprintf("it needs %s cpus, the machine has %s", number(n.CPUs), number(c.CPUs))
+		return fmt.Sprintf("it asks for %s CPUs, the machine has %s", number(n.CPUs), number(c.CPUs))
 	case n.RAM > c.RAM:
-		return fmt.Sprintf("it needs %s MB of memory, the machine has %s", number(n.RAM), number(c.RAM))
+		return fmt.Sprintf("it asks for %s of memory, the machine has %s", megabytes(n.RAM), megabytes(c.RAM))
 	case n.GPUs > c.GPUs:
-		return fmt.Sprintf("it needs %d gpus, the machine has %d", n.GPUs, c.GPUs)
+		return fmt.Sprintf("it asks for %s, the machine has %s errand counts", some(n.GPUs, "card"), some(c.GPUs, "card"))
 	}
 	return ""
+}
+
+func megabytes(mb float64) string {
+	if mb >= 1024 {
+		return strconv.FormatFloat(mb/1024, 'f', 1, 64) + " GB"
+	}
+	return strconv.FormatFloat(mb, 'f', 0, 64) + " MB"
 }
 
 // ShownVars: its variables, the values of those that hold a secret aside

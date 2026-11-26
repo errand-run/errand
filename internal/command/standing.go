@@ -77,7 +77,7 @@ func statusMain(t *reach.Term, args []string) int {
 		}
 	}
 	root := projectOf(t)
-	said := reach.Gather(t, false)
+	said := reach.Once(reach.Gather(t, false))
 	type line struct{ machine, id, what, age, state string }
 	by := map[string][]line{}
 	var order, names, dormant, after []string

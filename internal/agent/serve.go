@@ -809,11 +809,6 @@ func (a *Place) sweepServices() {
 // authorization's hash ( `hash`, to `only` when the link is restricted ); a lease's label or hash ( `name` )
 func (a *Place) askedService(req map[string]any) (spec svc.ServiceSpec, err error) {
 	name, page, hash, only := kit.Text(req["name"]), kit.Text(req["page"]), kit.Text(req["hash"]), kit.Text(req["only"])
-	refuse := func(r svc.Refusal) {
-		r.Why = err.Error()
-		svc.Refuse(r)
-		a.stir()
-	}
 	switch {
 	case req["spec"] != nil:
 		if err = reach.DecodeInto(req["spec"], &spec); err != nil {
@@ -824,18 +819,11 @@ func (a *Place) askedService(req map[string]any) (spec svc.ServiceSpec, err erro
 		installed, said := svc.PageServices()
 		var ok bool
 		if spec, ok = installed[page]; !ok {
-			why := fmt.Sprintf("%s is not authorized to pages on %s: errand serve authorize --to pages %s [-- COMMAND]", page, queue.Host(), page)
+			why := fmt.Sprintf("%s is not authorized to pages on %s", page, queue.Host())
 			for _, s := range said {
 				why += "\n" + s
 			}
-			err = errors.New(why)
-			r := svc.Refusal{Who: "pages", What: page, From: kit.Text(req["from"])}
-			r.Command, _, _, _ = svc.ComposedHere(page)
-			refuse(r)
-			return
-		}
-		if bad := svc.WrongVersion(page, spec.Provider); bad != "" {
-			return spec, fmt.Errorf("%s: %s", page, bad)
+			return spec, errors.New(why)
 		}
 		if auth := svc.PageAuthorized()[page]; auth != nil {
 			svc.UsedNow(auth.Hash)
@@ -847,11 +835,9 @@ func (a *Place) askedService(req map[string]any) (spec svc.ServiceSpec, err erro
 			if r, ok := a.leaseCalled(hash); ok && only == "" { // what this user asked for in full
 				return r.Spec, nil
 			}
-			who := only
-			if who == "" {
-				who = "connect"
+			if only != "" { // ( a line of the journal: nothing else is kept of a refusal, ADR 0041 )
+				fmt.Fprintf(os.Stderr, "errand agent: refused to %s: %s ( %v )\n", only, hash, err)
 			}
-			refuse(svc.Refusal{Who: who, What: hash})
 			return
 		}
 		svc.UsedNow(auth.Hash)

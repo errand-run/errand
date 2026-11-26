@@ -1,16 +1,11 @@
-// The services a page served as it is asks for, through its own address ( ADR 0026, 0027 ):
+// The services a page served as it is asks for, through its own address ( ADR 0026, 0041 ):
 //
-//	GET  .errand/services                    per service: version, protocol, `on` ( the machine chosen ), state, why, lines
-//	GET  .errand/machines                    the machines offered, in order, each with what is known of it yet
-//	GET  .errand/machines/<M>[?refresh=1]    what M has for them
-//	POST .errand/services/<name>  {"on": M}  the machine chosen, kept per view
-//	POST .errand/copy             {"on": M}  the view's files copied into errand's cache on M, kept up to date
-//	POST .errand/machines/<M>/paths  {"tool", "path"}    a place for M's agent to look
-//	ANY  .errand/svc/<name>/<p>              relayed to `name#version` on the machine chosen, started there first
+//	GET  .errand/machines                          the machines it may choose, by their ids: [ { id, name, here } ]
+//	POST .errand/srv            { …description, on }   { url, state, key } -- or { error, why, html, authorize }
+//	ANY  .errand/srv/<MACHINE>/<NAME>~<HASH>/<p>   relayed to that service on that machine, started there first
 //
-// A page starts only what both sides name: a service its `services.json` lists, and that the machine authorizes to pages under
-// that exact name and version ( ADR 0040 ). Nothing in a page says a command: the lines are for a person to type, or to
-// confirm in errand's own page.
+// The page describes its service in full; nothing runs unless a person authorized that description on that machine, in
+// errand's own page ( authorize.go ): a page never says a command that runs. A refusal is not written anywhere.
 
 package page
 
@@ -19,13 +14,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -33,17 +28,10 @@ import (
 	"github.com/errand-run/errand/internal/kit"
 	"github.com/errand-run/errand/internal/reach"
 	"github.com/errand-run/errand/internal/svc"
+	"github.com/errand-run/errand/internal/system"
 )
 
-const (
-	lookKept     = 5 * time.Minute
-	lookKeptHere = 2 * time.Second
-)
-
-type looked struct {
-	at  time.Time
-	got map[string]any
-}
+const rootKept = 30 * time.Second // where another machine sees a view's files
 
 type viewCopy struct {
 	State string  `json:"state"`
@@ -52,33 +40,16 @@ type viewCopy struct {
 	asked time.Time
 }
 
-var pageMu sync.Mutex
-
-var looks = map[string]looked{}
-
-var viewCopies = map[string]*viewCopy{}
-
-func pageState(name string) string { return filepath.Join(kit.LocalCache(), "page", name) }
-
-func readState(name string) map[string]map[string]string {
-	out := map[string]map[string]string{}
-	if data, err := os.ReadFile(pageState(name)); err == nil {
-		_ = json.Unmarshal(data, &out)
-	}
-	return out
+type seenRoot struct {
+	path string
+	at   time.Time
 }
 
-func keepState(name, vid, what, value string) {
-	pageMu.Lock()
-	defer pageMu.Unlock()
-	got := readState(name)
-	if got[vid] == nil {
-		got[vid] = map[string]string{}
-	}
-	got[vid][what] = value
-	b, _ := json.MarshalIndent(got, "", " ")
-	_ = kit.WriteWhole(pageState(name), string(b))
-}
+var (
+	pageMu     sync.Mutex
+	viewCopies = map[string]*viewCopy{}
+	roots      = map[string]seenRoot{}
+)
 
 type pageAsk struct {
 	w   *webServer
@@ -87,132 +58,39 @@ type pageAsk struct {
 	vid string
 }
 
-func (p pageAsk) machine(name string) *UiMachine {
+// machineID: what tells a machine from any other, in a page's addresses -- never its name, which may be ambiguous
+func machineID(m *UiMachine) string {
+	if m.Here() {
+		return svc.Short("machine " + system.MachineID())
+	}
+	for _, n := range m.M.Notes {
+		if n.ID != "" {
+			return svc.Short("machine " + n.ID)
+		}
+	}
+	if h := m.M.Spec(); h != nil {
+		return svc.Short("host " + h.Key())
+	}
+	return svc.Short("name " + m.Name())
+}
+
+// byID: a machine by its id; "": the one that serves the page
+func (p pageAsk) byID(id string) *UiMachine {
 	for _, m := range p.u.snapshot() {
-		if m.Name() == name || (m.Here() && name == "here") {
-			m := m
+		if (id == "" && m.Here()) || (id != "" && machineID(m) == id) {
 			return p.u.real(m)
 		}
 	}
 	return nil
 }
 
-// look: what a machine has for this view's services, kept a while
-func (p pageAsk) look(name string, refresh bool) map[string]any {
-	k := p.vid + "\x00" + name
-	m := p.machine(name)
-	pageMu.Lock()
-	got, ok := looks[k]
-	pageMu.Unlock()
-	keep := lookKept
-	if m != nil && m.Here() {
-		keep = lookKeptHere
-	}
-	if ok && !refresh && time.Since(got.at) < keep {
-		return got.got
-	}
-	answer := map[string]any{"unreachable": true, "error": name + ": not a machine errand knows", "services": map[string]any{}}
-	if m != nil {
-		req := svc.LookRequest(p.dir, p.vid, name)
-		paths := map[string][]string{}
-		for tool, list := range readState("paths.json")[name] {
-			paths[tool] = strings.Split(list, "\n")
-		}
-		req["paths"] = paths
-		done := make(chan struct{})
-		var a map[string]any
-		var err error
-		go func() {
-			a, err = p.u.Ask(m, map[string]any{"op": "services_do", "req": req})
-			close(done)
-		}()
-		select {
-		case <-done:
-			if err == nil {
-				answer = a
-			} else {
-				answer["error"] = kit.FirstLine(err.Error())
-			}
-		case <-time.After(15 * time.Second):
-			answer["error"] = name + ": its agent said nothing within 15 s"
-		}
-	}
-	pageMu.Lock()
-	if store, ok := answer["store"].(map[string]any); ok && kit.Text(store["seen"]) == "none" && viewCopies[k] != nil {
-		store["copying"] = viewCopies[k]
-	}
-	looks[k] = looked{time.Now(), answer}
-	pageMu.Unlock()
-	return answer
-}
-
-func (p pageAsk) entry(a map[string]any, name string) map[string]any {
-	if a["unreachable"] == true {
-		return map[string]any{"state": "unreachable", "why": kit.Text(a["error"]), "found": []any{}, "lines": []any{}, "store": map[string]any{}}
-	}
-	services, _ := a["services"].(map[string]any)
-	was, _ := services[name].(map[string]any)
-	e := map[string]any{"state": "unknown", "why": "", "found": []any{}, "lines": []any{}}
-	for k, v := range was {
-		e[k] = v
-	}
-	store, _ := a["store"].(map[string]any)
-	if store == nil {
-		store = map[string]any{}
-	}
-	e["store"] = store
-	switch kit.Text(e["state"]) {
-	case "ready", "running", "installable":
-		if kit.Text(store["seen"]) == "none" {
-			e["needs_copy"] = true
-			e["missing"] = append([]any{"a copy of this store ( errand copies it into its cache there )"}, anyList(e["missing"])...)
-		}
-	}
-	return e
-}
-
-// withDev: the entry as the view runs it -- from the checkout, by default when there is a usable one, or the version
-func withDev(e map[string]any, from string) map[string]any {
-	d, _ := e["dev"].(map[string]any)
-	e["from"] = "version"
-	if d == nil || d["off"] == true || d["off"] != nil && d["off"] != false {
-		return e
-	}
-	st := kit.Text(d["state"])
-	if from == "" && (st == "ready" || st == "running") {
-		from = "dev"
-	}
-	if from == "dev" {
-		e["version_state"], e["version_why"] = e["state"], e["why"]
-		e["from"], e["state"], e["why"] = "dev", st, kit.Text(d["why"])
-	}
-	return e
-}
-
-var stateOrder = map[string]int{"running": 0, "ready": 0, "installable": 1, "unverified": 2, "wrong version": 2, "unknown": 3, "unavailable": 4, "unreachable": 5}
-
-// on: the machine chosen for a service, else the first where it is ready, else installable, this one first
-func (p pageAsk) on(name string) string {
-	if m := readState("choices.json")[p.vid][name]; m != "" {
-		return m
-	}
-	best, rank := "", 9
+func (p pageAsk) byName(name string) *UiMachine {
 	for _, m := range p.u.snapshot() {
-		if best == "" {
-			best = m.Name()
-		}
-		pageMu.Lock()
-		got, ok := looks[p.vid+"\x00"+m.Name()]
-		pageMu.Unlock()
-		if !ok {
-			continue
-		}
-		r, known := stateOrder[kit.Text(p.entry(got.got, name)["state"])]
-		if known && r < rank {
-			best, rank = m.Name(), r
+		if m.Name() == name {
+			return p.u.real(m)
 		}
 	}
-	return best
+	return nil
 }
 
 func (w *webServer) pageServices(rw http.ResponseWriter, r *http.Request, dir, vid string, rest []string) {
@@ -223,135 +101,152 @@ func (w *webServer) pageServices(rw http.ResponseWriter, r *http.Request, dir, v
 	}
 	p := pageAsk{w, u, dir, vid}
 	pageMu.Lock()
-	for k, c := range viewCopies {
+	for k, c := range viewCopies { // ( a copy is kept up to date while its view asks )
 		if strings.HasPrefix(k, vid+"\x00") {
 			c.asked = time.Now()
 		}
 	}
 	pageMu.Unlock()
 	get := r.Method == http.MethodGet || r.Method == http.MethodHead
-	want := svc.AskedServices(dir)
-	body := func() map[string]any {
-		out := map[string]any{}
-		_ = json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&out)
-		return out
-	}
-	offered := func(name string) bool { return p.machine(name) != nil }
-	for i := range rest {
-		if rest[0] != "svc" || i < 2 {
-			rest[i], _ = url.PathUnescape(rest[i])
-		}
-	}
 	switch {
-	case len(rest) == 1 && rest[0] == "services" && get:
-		out := map[string]any{}
-		for name, s := range want {
-			m := p.on(name)
-			e := withDev(p.entry(p.look(m, false), name), readState("from.json")[vid][name])
-			e["version"], e["protocol"], e["optional"], e["text"], e["source"], e["on"] = svc.OrNil(s.Version), s.Protocol, s.Optional, s.Text, s.Source, m
-			out[name] = e
-		}
-		sendJSON(rw, 200, out)
 	case len(rest) == 1 && rest[0] == "machines" && get:
 		out := []map[string]any{}
 		for _, m := range u.snapshot() {
-			pageMu.Lock()
-			got, known := looks[vid+"\x00"+m.Name()]
-			pageMu.Unlock()
-			row := map[string]any{"name": m.Name(), "here": m.Here(), "known": known, "origin": false}
-			if known {
-				services := map[string]any{}
-				for name := range want {
-					e := p.entry(got.got, name)
-					services[name] = map[string]any{"state": e["state"], "why": e["why"]}
-				}
-				row["services"] = services
-			}
-			out = append(out, row)
+			out = append(out, map[string]any{"id": machineID(m), "name": m.Name(), "here": m.Here()})
 		}
 		sendJSON(rw, 200, out)
-	case len(rest) == 2 && rest[0] == "machines" && get:
-		if !offered(rest[1]) {
-			http.Error(rw, rest[1]+": not a machine offered", http.StatusNotFound)
-			return
-		}
-		a := p.look(rest[1], r.URL.Query().Get("refresh") == "1")
-		services := map[string]any{}
-		for name := range want {
-			services[name] = p.entry(a, name)
-		}
-		store := a["store"]
-		if store == nil {
-			store = map[string]any{}
-		}
-		sendJSON(rw, 200, map[string]any{"name": rest[1], "store": store, "platform": a["platform"], "cards": anyList(a["cards"]), "unreachable": a["unreachable"] == true,
-			"error": a["error"], "services": services})
-	case len(rest) == 2 && rest[0] == "services" && r.Method == http.MethodPost:
-		b := body()
-		name, on, from := rest[1], text2(b["on"]), text2(b["from"])
-		switch {
-		case !has(want, name):
-			http.Error(rw, "this directory's services.json does not name "+name, http.StatusNotFound)
-			return
-		case on != "" && !offered(on):
-			http.Error(rw, on+": not a machine offered", http.StatusForbidden)
-			return
-		case from != "" && from != "dev" && from != "version":
-			http.Error(rw, `"from": "dev" or "version"`, http.StatusBadRequest)
-			return
-		}
-		out := map[string]any{"ok": true}
-		if on != "" {
-			keepState("choices.json", vid, name, on)
-		}
-		if from != "" {
-			keepState("from.json", vid, name, from)
-			out["from"] = from
-		}
-		out["on"] = p.on(name)
-		sendJSON(rw, 200, out)
-	case len(rest) == 1 && rest[0] == "copy" && r.Method == http.MethodPost:
-		on := text2(body()["on"])
-		m := p.machine(on)
-		if m == nil {
-			http.Error(rw, on+": not a machine offered", http.StatusForbidden)
-			return
-		}
-		if m.Here() {
-			sendJSON(rw, 200, map[string]any{"error": "this machine serves the view: nothing to copy"})
-			return
-		}
-		sendJSON(rw, 200, p.copy(m))
-	case len(rest) == 3 && rest[0] == "machines" && rest[2] == "paths" && r.Method == http.MethodPost:
-		b := body()
-		tool, at := text2(b["tool"]), text2(b["path"])
-		if tool == "" || at == "" || strings.Contains(at, "\n") {
-			http.Error(rw, "{ tool, path }", http.StatusBadRequest)
-			return
-		}
-		list := readState("paths.json")[rest[1]][tool]
-		if list != "" {
-			list += "\n"
-		}
-		keepState("paths.json", rest[1], tool, list+at)
-		pageMu.Lock()
-		delete(looks, vid+"\x00"+rest[1])
-		pageMu.Unlock()
-		sendJSON(rw, 200, map[string]any{"ok": true})
-	case len(rest) >= 2 && rest[0] == "svc":
-		if !has(want, rest[1]) {
-			http.Error(rw, "this directory's services.json does not name "+rest[1], http.StatusForbidden)
-			return
-		}
-		p.relay(rw, r, rest[1], want[rest[1]], "/"+strings.Join(rest[2:], "/"))
+	case len(rest) == 1 && rest[0] == "srv" && r.Method == http.MethodPost:
+		p.ask(rw, r)
+	case len(rest) >= 3 && rest[0] == "srv":
+		p.relay(rw, r, rest[1], rest[2], "/"+strings.Join(rest[3:], "/"))
 	default:
 		http.Error(rw, "not found", http.StatusNotFound)
 	}
 }
 
-func has(m map[string]svc.AskedService, k string) bool { _, ok := m[k]; return ok }
+// look: what machine m has for a description
+func (p pageAsk) look(m *UiMachine, d svc.PageDesc, paths map[string][]string) (svc.PageLook, error) {
+	var l svc.PageLook
+	req := map[string]any{"do": "page_look", "described": d, "paths": paths}
+	if !m.Here() {
+		req["store"] = svc.StoreOf(p.dir, p.vid)
+	}
+	got, err := askWithin(p.u, m, map[string]any{"op": "services_do", "req": req}, 15*time.Second)
+	if err == nil {
+		err = reach.DecodeInto(got["look"], &l)
+	}
+	return l, err
+}
 
-func text2(v any) string { s, _ := v.(string); return s }
+func askWithin(u *Ui, m *UiMachine, req map[string]any, d time.Duration) (map[string]any, error) {
+	type answer struct {
+		got map[string]any
+		err error
+	}
+	done := make(chan answer, 1)
+	go func() {
+		got, err := u.Ask(m, req)
+		done <- answer{got, err}
+	}()
+	select {
+	case a := <-done:
+		return a.got, a.err
+	case <-time.After(d):
+		return nil, fmt.Errorf("%s: its agent said nothing within %s", m.Name(), d)
+	}
+}
+
+// ask: a page's description -> its address on the machine it names, or why not and where to set it up
+func (p pageAsk) ask(rw http.ResponseWriter, r *http.Request) {
+	data, _ := io.ReadAll(io.LimitReader(r.Body, 1<<18))
+	d, on, err := svc.ParsePageDesc(data)
+	if err != nil {
+		sendJSON(rw, http.StatusBadRequest, map[string]any{"error": "not a description", "why": err.Error()})
+		return
+	}
+	m := p.byID(on)
+	if m == nil {
+		sendJSON(rw, http.StatusNotFound, map[string]any{"error": "no machine", "why": on + ": no such machine here ( GET .errand/machines )"})
+		return
+	}
+	l, err := p.look(m, d, nil)
+	if err != nil {
+		sendJSON(rw, http.StatusServiceUnavailable, map[string]any{"error": "unreachable", "why": kit.FirstLine(err.Error())})
+		return
+	}
+	mid := machineID(m)
+	seen := m.Here() || kit.Text(l.Store["path"]) != ""
+	if l.State == "authorized" && seen {
+		if !m.Here() {
+			pageMu.Lock()
+			roots[p.vid+"\x00"+mid] = seenRoot{kit.Text(l.Store["path"]), time.Now()}
+			pageMu.Unlock()
+		}
+		sendJSON(rw, 200, map[string]any{"url": ".errand/srv/" + mid + "/" + l.Key + "/", "state": "authorized", "key": l.Key, "on": mid})
+		return
+	}
+	link := p.w.authorizeURL(r)
+	what, why := "not authorized", fmt.Sprintf("not set up on %s yet", m.Name())
+	switch {
+	case l.State == "authorized":
+		what, why = "no store", m.Name()+" does not see this view's files"
+	case l.State == "unavailable":
+		what, why = "unavailable", l.Why
+	}
+	described, _ := json.Marshal(d)
+	form := map[string]string{"described": string(described), "on": mid, "view": p.vid}
+	sendJSON(rw, http.StatusForbidden, map[string]any{"error": what, "why": why, "key": l.Key, "on": mid, "authorize": link, "form": form,
+		"html": fragment(l, m.Name(), why, link, form)})
+}
+
+// fragment: what a refusal says, as HTML a page inserts as it is -- the idea of it ( the details are the window's ), no
+// script; its one button opens errand's window, a form that carries the description there ( nothing is kept in between )
+func fragment(l svc.PageLook, machine, why, link string, form map[string]string) string {
+	e := html.EscapeString
+	var b strings.Builder
+	fmt.Fprintf(&b, `<div class="errand-service errand-%s"><style>.errand-service{font:13px/1.4 system-ui,sans-serif}.errand-service ul{margin:.3em 0;padding-left:1.2em}.errand-ok{color:#2a7a2a}.errand-missing{color:#a5520c}.errand-why{margin:.2em 0}.errand-setup{margin:.4em 0 0}</style>`, e(strings.ReplaceAll(l.State, " ", "-")))
+	fmt.Fprintf(&b, `<p class="errand-why">%s</p>`, e(why)) // ( what it is, the page says it: its description is its own )
+	if len(l.Missing) > 0 {
+		b.WriteString(`<ul class="errand-todo">`)
+		for _, n := range l.Missing {
+			short := n.Short
+			if short == "" {
+				short = n.What
+			}
+			fmt.Fprintf(&b, `<li class="errand-missing">%s</li>`, e(short))
+		}
+		b.WriteString("</ul>")
+	}
+	fmt.Fprintf(&b, `<form class="errand-setup" method="post" action="%s" target="_blank">`, e(link))
+	for _, k := range []string{"described", "on", "view"} {
+		fmt.Fprintf(&b, `<input type="hidden" name="%s" value="%s">`, k, e(form[k]))
+	}
+	fmt.Fprintf(&b, `<button type="submit">Set it up on %s…</button></form></div>`, e(machine))
+	return b.String()
+}
+
+// root: where machine m sees this view's files; "" when it does not
+func (p pageAsk) root(m *UiMachine, mid string) string {
+	if m.Here() {
+		return p.dir
+	}
+	k := p.vid + "\x00" + mid
+	pageMu.Lock()
+	got, ok := roots[k]
+	pageMu.Unlock()
+	if ok && time.Since(got.at) < rootKept && got.path != "" {
+		return got.path
+	}
+	a, err := askWithin(p.u, m, map[string]any{"op": "services_do", "req": map[string]any{"do": "store_seen", "store": svc.StoreOf(p.dir, p.vid)}}, 15*time.Second)
+	path := ""
+	if err == nil {
+		path = kit.Text(a["path"])
+	}
+	pageMu.Lock()
+	roots[k] = seenRoot{path, time.Now()}
+	pageMu.Unlock()
+	return path
+}
 
 // copy: the view's files in errand's cache on a machine, kept up to date while the page asks
 func (p pageAsk) copy(m *UiMachine) *viewCopy {
@@ -373,7 +268,6 @@ func (p pageAsk) copy(m *UiMachine) *viewCopy {
 				return
 			}
 			c.State, c.Error, c.At = "copied", "", kit.Seconds(time.Now())
-			delete(looks, k) // ( M sees it now: looked at again )
 			asked := c.asked
 			pageMu.Unlock()
 			time.Sleep(10 * time.Second)
@@ -434,33 +328,23 @@ func (c *chanConn) SetReadDeadline(time.Time) error { return nil }
 
 func (c *chanConn) SetWriteDeadline(time.Time) error { return nil }
 
-// relay: a request of the page, to the service on the machine chosen, its answer back ( a WebSocket included )
-func (p pageAsk) relay(rw http.ResponseWriter, r *http.Request, name string, want svc.AskedService, rest string) {
-	on := p.on(name)
-	m := p.machine(on)
-	if m == nil {
-		http.Error(rw, on+": not a machine errand knows", http.StatusServiceUnavailable)
+// relay: a request of the page, to the service on the machine its address names, its answer back ( a WebSocket included )
+func (p pageAsk) relay(rw http.ResponseWriter, r *http.Request, mid, key, rest string) {
+	refuse := func(code int, what, why string) { sendJSON(rw, code, map[string]any{"error": what, "why": why}) }
+	key, _ = url.PathUnescape(key)
+	if _, _, ok := svc.SplitPageKey(key); !ok {
+		refuse(http.StatusNotFound, "not an address", key+": NAME~HASH, as POST .errand/srv gives it")
 		return
 	}
-	a := p.look(on, false)
-	e := withDev(p.entry(a, name), readState("from.json")[p.vid][name])
-	key, root := want.Key(name), p.dir
-	if e["from"] == "dev" {
-		got, err := p.u.Ask(m, map[string]any{"op": "services_do", "req": map[string]any{"do": "dev_ensure", "name": name,
-			"want": map[string]any{"version": svc.OrNil(want.Version), "protocol": want.Protocol, "package": want.Package, "source": want.Source, "described": want.Described}}})
-		if err != nil {
-			http.Error(rw, kit.FirstLine(err.Error()), http.StatusServiceUnavailable)
-			return
-		}
-		key = kit.Text(got["key"])
+	m := p.byID(mid)
+	if m == nil {
+		refuse(http.StatusNotFound, "no machine", mid+": no such machine here")
+		return
 	}
-	if !m.Here() {
-		store, _ := a["store"].(map[string]any)
-		if text2(store["path"]) == "" {
-			http.Error(rw, on+" has no copy of this store: copy it there first", http.StatusServiceUnavailable)
-			return
-		}
-		root = text2(store["path"])
+	root := p.root(m, mid)
+	if root == "" {
+		refuse(http.StatusConflict, "no store", m.Name()+" does not see this view's files: POST .errand/srv says where to set it up")
+		return
 	}
 	dial := func(context.Context, string, string) (net.Conn, error) {
 		l, err := p.u.link()
@@ -491,11 +375,11 @@ func (p pageAsk) relay(rw http.ResponseWriter, r *http.Request, name string, wan
 		Transport:     &http.Transport{DialContext: dial, DisableKeepAlives: true},
 		FlushInterval: -1,
 		ErrorHandler: func(rw http.ResponseWriter, r *http.Request, err error) {
-			code := http.StatusServiceUnavailable
 			if strings.Contains(err.Error(), "is not authorized to pages") {
-				code, err = http.StatusForbidden, errors.New(key+" is not authorized to pages on "+on)
+				refuse(http.StatusForbidden, "not authorized", fmt.Sprintf("%s is not authorized to pages on %s", key, m.Name()))
+				return
 			}
-			http.Error(rw, fmt.Sprintf("service %q: %v", name, err), code)
+			refuse(http.StatusServiceUnavailable, "unavailable", fmt.Sprintf("%s: %v", key, errors.Unwrap(err)))
 		},
 	}
 	proxy.ServeHTTP(rw, r)

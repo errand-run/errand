@@ -43,7 +43,7 @@ func (w *webServer) idle() time.Duration {
 // webKeep: the page's address, and the stores', kept by the system -- or given back
 func webKeep(on bool) int {
 	if !on {
-		a, b := units.UnkeepPort(units.WebLabel), units.UnkeepPort(units.StoresLabel)
+		a, b := units.UnkeepPort(units.WebLabel()), units.UnkeepPort(units.StoresLabel())
 		if a || b {
 			fmt.Println("  given back")
 		} else {
@@ -59,7 +59,7 @@ func webKeep(on bool) int {
 		label string
 		port  int
 		verb  string
-	}{{units.WebLabel, runinfo.PortOfUser(), "kept-page"}, {units.StoresLabel, runinfo.PortOfUser() + 2, "kept-stores"}} {
+	}{{units.WebLabel(), runinfo.PortOfUser(), "kept-page"}, {units.StoresLabel(), runinfo.PortOfUser() + 2, "kept-stores"}} {
 		if err := units.KeepPort(k.label, []string{self, "web", "serve-" + k.verb}, "", k.port); err != nil {
 			fmt.Fprintln(os.Stderr, "errand web keep:", err)
 			return 1

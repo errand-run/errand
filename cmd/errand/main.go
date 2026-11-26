@@ -12,16 +12,33 @@ import (
 	"github.com/errand-run/errand/internal/agent"
 	"github.com/errand-run/errand/internal/command"
 	"github.com/errand-run/errand/internal/download"
+	"github.com/errand-run/errand/internal/draw"
 	"github.com/errand-run/errand/internal/page"
 	"github.com/errand-run/errand/internal/reach"
 	"github.com/errand-run/errand/internal/system"
 	"github.com/errand-run/errand/internal/tui"
 )
 
+// sayInstance: a line, to a person, when the errand typed is not the one in use ( ERRAND_INSTANCE ): a variable left in a
+// terminal changes errand without a word otherwise. ( ERRAND_CACHE_DIR is a setting of the machine, in a profile: not said. )
+func sayInstance() {
+	if system.Instance() == "main" || !draw.IsTerminal(os.Stderr) {
+		return
+	}
+	at := system.Cache()
+	if home, err := os.UserHomeDir(); err == nil && strings.HasPrefix(at, home+string(os.PathSeparator)) {
+		at = "~" + at[len(home):]
+	}
+	fmt.Fprintf(os.Stderr, "errand [%s]: %s\n", system.Instance(), at)
+}
+
 func main() {
 	args := os.Args[1:]
 	if len(args) == 4 && args[0] == "serve" && args[1] == "kept-lease" { // what the system starts for a port it keeps ( --always )
 		os.Exit(agent.KeptLease(args[2], args[3]))
+	}
+	if len(args) > 0 && (isVerb(args[0]) || typedVerb(args[0]) || args[0] == "web" || args[0] == "open") {
+		sayInstance()
 	}
 	if len(args) == 0 || strings.HasPrefix(args[0], "-") || isVerb(args[0]) || typedVerb(args[0]) {
 		words, answered := asTyped(args)
@@ -53,6 +70,8 @@ func main() {
 		time.Sleep(200 * time.Millisecond)
 	case len(args) >= 1 && args[0] == "place-again":
 		os.Exit(command.AgainMain(args[1:]))
+	case len(args) >= 1 && args[0] == "instances":
+		os.Exit(command.InstancesMain(args[1:]))
 	case len(args) >= 1 && args[0] == "quit":
 		os.Exit(command.QuitMain(args[1:]))
 	case len(args) == 1 && args[0] == "peek":

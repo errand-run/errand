@@ -38,11 +38,47 @@ type AgentVersion struct {
 	Kind    string  `json:"kind,omitempty"` // "" the machine's; "container"
 	Release string  `json:"release"`
 	Errand  string  `json:"errand"`
+	Built   int64   `json:"built,omitempty"` // when its program was built ( system.Built ); 0: not said
 	Pid     int     `json:"pid"`
 	Started float64 `json:"started"`
 }
 
 func ReleaseOf(s string) int { n, _ := strconv.Atoi(strings.TrimSpace(s)); return n }
+
+// MineVersion: this program, as an agent of it says itself
+func MineVersion() AgentVersion {
+	return AgentVersion{Release: Release, Errand: system.Version, Built: system.BuiltAt()}
+}
+
+// Before: whether an agent of `v` comes before one of `w` -- its release, then its version, then when it was built. One
+// that comes before is retired by the other; neither before the other: the one in place stays.
+func (v AgentVersion) Before(w AgentVersion) bool {
+	if a, b := ReleaseOf(v.Release), ReleaseOf(w.Release); a != b {
+		return a < b
+	}
+	if system.VersionBefore(v.Errand, w.Errand) || system.VersionBefore(w.Errand, v.Errand) {
+		return system.VersionBefore(v.Errand, w.Errand)
+	}
+	return v.Built < w.Built
+}
+
+// inPlace: an agent of this machine that a program of this release uses rather than start its own -- one that is not
+// before it, and answers; "" when there is none
+func inPlace() string {
+	mine, best := MineVersion(), ""
+	var bestV AgentVersion
+	for _, dir := range Machines(PlaceRoot(), PlaceDir()) {
+		v := VersionOf(dir)
+		if ReleaseOf(v.Release) != ReleaseOf(Release) || v.Before(mine) || (best != "" && v.Before(bestV)) {
+			continue
+		}
+		if !kit.IsFile(filepath.Join(dir, "version")) {
+			continue
+		}
+		best, bestV = dir, v
+	}
+	return best
+}
 
 func PlaceRoot() string { return filepath.Join(kit.LocalCache(), "place", queue.Host()) }
 
@@ -278,5 +314,16 @@ func ReachDaemon(dir, verb string) (net.Conn, error) {
 	return conn, nil
 }
 
-// ReachAgent: the socket of this program's agent on this machine
-func ReachAgent() (net.Conn, error) { return ReachDaemon(PlaceDir(), "place") }
+// ReachAgent: the socket of this machine's agent -- this program's, when it runs; else one that is not before it, of its
+// release ( a program called again after an update does not take the place back ); else this program's, started
+func ReachAgent() (net.Conn, error) {
+	if conn, err := kit.DialDir(PlaceDir(), 200*time.Millisecond); err == nil {
+		return conn, nil
+	}
+	if dir := inPlace(); dir != "" {
+		if conn, err := kit.DialDir(dir, 200*time.Millisecond); err == nil {
+			return conn, nil
+		}
+	}
+	return ReachDaemon(PlaceDir(), "place")
+}

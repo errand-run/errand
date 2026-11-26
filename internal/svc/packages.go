@@ -1,15 +1,9 @@
-// The packages of a machine that describe services ( ADR 0027 §1-2 ): found, read and composed, nothing imported or run.
-//
-// A package describes its services in a file it ships, `errand-services.json`, beside their code; an entry point of the
-// group `errand.services` names the module that holds it. Everything here reads files: an env's `*.dist-info`, the
-// editable finders' mapping, the package's own files.
+// The envs of a machine, the services' own envs, and the code errand fetched ( ADR 0027, 0041 ): found and read, nothing
+// imported or run. `{file:REL}`, `{python}` and `{tool:NAME}` are what a page's description says of them.
 
 package svc
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
-	"fmt"
 	"io/fs"
 	"net/url"
 	"os"
@@ -25,35 +19,7 @@ import (
 	"github.com/errand-run/errand/internal/layer"
 )
 
-const (
-	describedFile = "errand-services.json"
-	sourceFile    = ".errand-source.json" // in a repository errand fetched: { git, rev, at, dirs }
-)
-
-// serviceVersion: the version of `name#version` -- the producer computes the same when it writes a store
-func serviceVersion(name string, entry map[string]any, base string) (string, error) {
-	h := sha256.New()
-	protocol := entry["protocol"]
-	if protocol == nil {
-		protocol = 1
-	}
-	fmt.Fprintf(h, "errand-service/1 %s protocol %v\n", name, protocol)
-	for _, rel := range kit.Strs(entry["version_of"]) {
-		data, err := os.ReadFile(filepath.Join(base, filepath.FromSlash(rel)))
-		if err != nil {
-			return "", err
-		}
-		fmt.Fprintf(h, "%s %d\n", rel, len(data))
-		h.Write(data)
-	}
-	return hex.EncodeToString(h.Sum(nil))[:8], nil
-}
-
-// splitKey: `blender#3fa29c1e` -> blender, 3fa29c1e; a bare name -> name, ""
-func splitKey(key string) (string, string) {
-	name, v, _ := strings.Cut(key, "#")
-	return name, v
-}
+const sourceFile = ".errand-source.json" // in a repository errand fetched: { git, rev, at, dirs }
 
 // ── the envs of this machine ─────────────────────────────────────────────────
 
@@ -140,83 +106,6 @@ func pythonIn(prefix string) string {
 	return ""
 }
 
-// ── the packages that describe services ──────────────────────────────────────
-
-// provider is a package that describes services
-type provider struct {
-	Env      string // the env's prefix, or the repository's directory
-	Python   string // its interpreter
-	Package  string
-	Version  string // the distribution's
-	Dir      string // where the module that describes is
-	Editable string // the checkout, for an editable install
-	Data     map[string]any
-}
-
-func (p provider) file() string { return filepath.Join(p.Dir, describedFile) }
-
-func (p provider) Entry(name string) map[string]any {
-	services, _ := p.Data["services"].(map[string]any)
-	e, _ := services[name].(map[string]any)
-	return e
-}
-
-// gives: the version of a service it describes; "" when it describes none, or a file is missing
-func (p provider) gives(name string) string {
-	if e := p.Entry(name); e != nil {
-		if v, err := serviceVersion(name, e, p.Dir); err == nil {
-			return v
-		}
-	}
-	return ""
-}
-
-func described(dir string) map[string]any {
-	return caches.ReadObject(filepath.Join(dir, describedFile))
-}
-
-func entryPointModules(dist string) []string {
-	data, err := os.ReadFile(filepath.Join(dist, "entry_points.txt"))
-	if err != nil {
-		return nil
-	}
-	group := ""
-	var out []string
-	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		switch {
-		case line == "" || line[0] == '#' || line[0] == ';':
-		case line[0] == '[' && strings.HasSuffix(line, "]"):
-			group = strings.TrimSpace(line[1 : len(line)-1])
-		case group == "errand.services" && strings.Contains(line, "="):
-			_, v, _ := strings.Cut(line, "=")
-			v, _, _ = strings.Cut(strings.TrimSpace(v), ":")
-			out = append(out, v)
-		}
-	}
-	return out
-}
-
-func distSaid(dist string) (string, string) {
-	name, version := filepath.Base(dist), ""
-	if i := strings.LastIndex(name, "-"); i > 0 {
-		name = name[:i]
-	}
-	data, _ := os.ReadFile(filepath.Join(dist, "METADATA"))
-	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimRight(line, "\r")
-		if v, ok := strings.CutPrefix(line, "Name:"); ok {
-			name = strings.TrimSpace(v)
-		} else if v, ok := strings.CutPrefix(line, "Version:"); ok {
-			version = strings.TrimSpace(v)
-		} else if strings.TrimSpace(line) == "" {
-			break
-		}
-	}
-	return name, version
-}
-
-// pathOfURL: the path a `file:` URL names, as this system writes it -- `file:///C:/x` is `C:\x`
 func pathOfURL(u *url.URL) string {
 	p := u.Path
 	if runtime.GOOS == "windows" && len(p) > 2 && p[0] == '/' && p[2] == ':' {
@@ -272,75 +161,6 @@ func httpsURL(from string) string {
 	return strings.TrimSuffix(strings.TrimSuffix(from, "/"), ".git")
 }
 
-// mappedTo: where an editable install puts a top-level package -- its finders' MAPPING, the plain paths of `.pth` files
-func mappedTo(site, top string) []string {
-	var out []string
-	a, _ := filepath.Glob(filepath.Join(site, "__editable__*finder.py"))
-	b, _ := filepath.Glob(filepath.Join(site, "_*editable*.py"))
-	for _, f := range append(a, b...) {
-		data, _ := os.ReadFile(f)
-		if m := finderMap.FindStringSubmatch(string(data)); m != nil {
-			for _, kv := range finderPair.FindAllStringSubmatch(m[1], -1) {
-				if kv[1] == top {
-					out = append(out, kv[2])
-				}
-			}
-		}
-	}
-	pth, _ := filepath.Glob(filepath.Join(site, "*.pth"))
-	for _, f := range pth {
-		data, _ := os.ReadFile(f)
-		for _, line := range strings.Split(string(data), "\n") {
-			if line = strings.TrimSpace(line); filepath.IsAbs(line) {
-				out = append(out, filepath.Join(line, top))
-			}
-		}
-	}
-	return out
-}
-
-func moduleDir(site, module, editable string) string {
-	parts := strings.Split(module, ".")
-	tries := []string{filepath.Join(append([]string{site}, parts...)...)}
-	for _, top := range mappedTo(site, parts[0]) {
-		tries = append(tries, filepath.Join(append([]string{top}, parts[1:]...)...))
-	}
-	if editable != "" {
-		rel := filepath.Join(parts...)
-		tries = append(tries, filepath.Join(editable, "src", rel), filepath.Join(editable, rel))
-	}
-	for _, c := range tries {
-		if kit.IsFile(filepath.Join(c, describedFile)) {
-			return c
-		}
-	}
-	return ""
-}
-
-func providersIn(prefix string) []provider {
-	var out []provider
-	for _, site := range sites(prefix) {
-		dists, _ := filepath.Glob(filepath.Join(site, "*.dist-info"))
-		sort.Strings(dists)
-		for _, dist := range dists {
-			for _, module := range entryPointModules(dist) {
-				editable, _ := installedFrom(dist)
-				dir := moduleDir(site, module, editable)
-				if dir == "" {
-					continue
-				}
-				data := described(dir)
-				if data == nil {
-					continue
-				}
-				name, version := distSaid(dist)
-				out = append(out, provider{Env: prefix, Python: pythonIn(prefix), Package: name, Version: version, Dir: dir, Editable: editable, Data: data})
-			}
-		}
-	}
-	return out
-}
-
 func reposDir() string { return filepath.Join(kit.LocalCache(), "repos") }
 
 // repoDir: where the files of a repository at a commit are kept
@@ -384,52 +204,6 @@ func sortedKeys[V any](m map[string]V) []string {
 		out = append(out, k)
 	}
 	sort.Strings(out)
-	return out
-}
-
-func providersFetched() []provider {
-	var out []provider
-	code := fetchedCode()
-	for _, root := range sortedKeys(code) {
-		said := code[root]
-		_ = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
-			if err == nil && d.IsDir() && d.Name() == ".git" {
-				return filepath.SkipDir
-			}
-			if err != nil || d.Name() != describedFile {
-				return nil
-			}
-			data := described(filepath.Dir(p))
-			if data == nil {
-				return nil
-			}
-			pkg, _ := data["package"].(map[string]any)
-			rev := kit.Text(said["rev"])
-			out = append(out, provider{Env: root, Package: kit.Text(pkg["name"]), Version: kit.Text(said["git"]) + "@" + rev[:min(len(rev), 12)], Dir: filepath.Dir(p), Data: data})
-			return nil
-		})
-	}
-	return out
-}
-
-// providers: every package of errand's service envs, and every repository it fetched, that describes services
-func providers() []provider {
-	var out []provider
-	for _, e := range serviceEnvs() {
-		out = append(out, providersIn(e)...)
-	}
-	return append(out, providersFetched()...)
-}
-
-// providing: those that give exactly `name#version`
-func providing(key string) []provider {
-	name, v := splitKey(key)
-	var out []provider
-	for _, p := range providers() {
-		if p.Entry(name) != nil && (v == "" || p.gives(name) == v) {
-			out = append(out, p)
-		}
-	}
 	return out
 }
 
@@ -480,67 +254,3 @@ func knownRepos() map[string]bool {
 // ── composing a command ──────────────────────────────────────────────────────
 
 var describedWord = regexp.MustCompile(`\{(python|file:[^{}]+|tool:[A-Za-z0-9_.-]+|port(?::[a-z][a-z0-9_]*)?)\}`)
-
-// compose: the words of a service on this machine -- `{python}` the env's, `{file:REL}` the package's file, `{tool:NAME}`
-// what was found; `{port}` and `{port:NAME}` stay for whoever keeps it
-func (p provider) compose(name string, tools map[string]string, check bool) ([]string, error) {
-	entry := p.Entry(name)
-	if entry == nil {
-		who := p.Package
-		if who == "" {
-			who = p.Dir
-		}
-		return nil, fmt.Errorf("%s describes no service %q", who, name)
-	}
-	run := kit.Strs(entry["run"])
-	if len(run) == 0 || len(run) != len(caches.ListOf(entry["run"])) {
-		return nil, fmt.Errorf("%s: `run` is a list of words", name)
-	}
-	var bad error
-	var out []string
-	for _, w := range run {
-		out = append(out, describedWord.ReplaceAllStringFunc(w, func(f string) string {
-			what := f[1 : len(f)-1]
-			switch {
-			case what == "python":
-				if p.Python == "" {
-					bad = fmt.Errorf("%s: no Python in %s", name, p.Env)
-				}
-				return p.Python
-			case strings.HasPrefix(what, "file:"):
-				at := filepath.Join(p.Dir, filepath.FromSlash(what[5:]))
-				if check {
-					real, err := filepath.EvalSymlinks(at)
-					if err != nil {
-						bad = fmt.Errorf("%s: %s is not in %s", name, what[5:], p.Dir)
-						return f
-					}
-					at = real
-				}
-				return at
-			case strings.HasPrefix(what, "tool:"):
-				if tools[what[5:]] == "" {
-					bad = fmt.Errorf("%s: no %s found", name, what[5:])
-				}
-				return tools[what[5:]]
-			}
-			return f
-		}))
-	}
-	return out, bad
-}
-
-// DescribedNeeds: what a description asks of a declaration
-func DescribedNeeds(entry map[string]any) map[string]any {
-	out := map[string]any{}
-	needs, _ := entry["needs"].(map[string]any)
-	for _, k := range []string{"gpus", "gpu_ram", "ram", "cpus"} {
-		if needs[k] != nil {
-			out[k] = needs[k]
-		}
-	}
-	if entry["idle"] != nil && entry["idle"] != "" {
-		out["idle"] = entry["idle"]
-	}
-	return out
-}

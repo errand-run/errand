@@ -23,7 +23,7 @@ func TestAStableNameWhereErrandWasSent(t *testing.T) {
 	p.env = append(p.env, python(t)...)
 	p.write("errand-envs.py", "import errand\nerrand.envs[ 'box' ] = errand.Env( [ errand.Ssh( host = 'box', root = 'copy' ) ] )\n")
 	far := filepath.Join(p.far, "cache")
-	name := filepath.Join(far, "bin", "errand")
+	name := filepath.Join(far, "main", "bin", "errand") // ( main's stable name; <errand's>/bin/errand leads to it )
 	leads := func(program string) {
 		t.Helper()
 		hash, _ := kit.HashOfFile(program)
@@ -39,7 +39,7 @@ func TestAStableNameWhereErrandWasSent(t *testing.T) {
 	}
 	forced := func() { // as sshd starts it: nothing of errand's in the surroundings but where its directory is
 		t.Helper()
-		c := exec.Command(name, "serve")
+		c := exec.Command(name, "serve") // ( main's stable name, as a key forces it )
 		c.Env = []string{"HOME=" + filepath.Join(p.far, "home"), "ERRAND_CACHE_DIR=" + far, "XDG_RUNTIME_DIR=" + filepath.Join(p.far, "queue"), "PATH=" + os.Getenv("PATH"), "SHELL=/bin/sh"}
 		if out, err := c.CombinedOutput(); err != nil {
 			t.Fatalf("by its name: %v %s", err, out)
@@ -58,16 +58,16 @@ func TestAStableNameWhereErrandWasSent(t *testing.T) {
 	forced()
 	// the copy it leads to is not one nothing uses, however long ago it served; the other is
 	t.Setenv("ERRAND_CACHE_DIR", far)
-	_ = exec.Command("pkill", "-f", filepath.Join(far, "place")).Run()
+	_ = exec.Command("pkill", "-f", filepath.Join(far, "main", "place")).Run()
 	time.Sleep(500 * time.Millisecond)
 	long := time.Now().Add(-60 * 24 * time.Hour)
 	for _, program := range []string{built, builtNext} {
 		hash, _ := kit.HashOfFile(program)
 		for _, f := range []string{"errand", ""} {
-			_ = os.Chtimes(filepath.Join(far, "bin", hash, f), long, long)
+			_ = os.Chtimes(filepath.Join(far, "main", "bin", hash, f), long, long)
 		}
 	}
-	places, _ := filepath.Glob(filepath.Join(far, "place", "*"))
+	places, _ := filepath.Glob(filepath.Join(far, "main", "place", "*"))
 	a := &agent.Place{Dir: filepath.Join(places[0], "mine"), Root: places[0]}
 	gone := strings.Join(a.Tidy(time.Now()), "\n")
 	was, _ := kit.HashOfFile(built)

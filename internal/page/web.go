@@ -260,10 +260,9 @@ func webServe(args []string) int {
 		return 0 // served already
 	}
 	defer lock.Close()
-	home, _ := os.UserHomeDir()
 	port, static := 0, 0
-	// the user's ports, the same every time, are the user's own cache's: another cache ( a test's ) takes any free one
-	if kit.LocalCache() == filepath.Join(home, ".cache", "errand") {
+	// the user's ports, the same every time, are the errand in use's: another ( an instance, a test's ) takes any free one
+	if system.Usual() { // ( the errand in use, where it usually is: its own ports )
 		port, static = runinfo.PortOfUser(), runinfo.PortOfUser()+2
 	}
 	kept := units.KeptPorts()
@@ -362,7 +361,15 @@ func (w *webServer) tell(said string) {
 	w.mu.Unlock()
 }
 
-func (w *webServer) cookie() string { return fmt.Sprintf("errand-%d", os.Getuid()) }
+// cookie: its name -- by its port too: a browser keeps one cookie per name and host, whatever the port, and two errands on
+// one machine ( another HOME, a test ) would each take the other's
+func (w *webServer) cookie() string {
+	port := w.said.Port
+	if w.said.Public > 0 {
+		port = w.said.Public
+	}
+	return fmt.Sprintf("errand-%d-%d", os.Getuid(), port)
+}
 
 func hostOK(r *http.Request, ports ...int) bool {
 	host, port, err := net.SplitHostPort(r.Host)
@@ -401,7 +408,7 @@ func next(where string) string {
 func sendHTML(rw http.ResponseWriter, code int, body string) {
 	rw.Header().Set("Content-Type", "text/html; charset=utf-8")
 	rw.Header().Set("Cache-Control", "no-store")
-	rw.Header().Set("Referrer-Policy", "no-referrer")
+	rw.Header().Set("Referrer-Policy", "same-origin") // ( nothing to another origin; its own POSTs say their Origin, which no-referrer makes "null" )
 	rw.Header().Set("X-Content-Type-Options", "nosniff")
 	rw.WriteHeader(code)
 	_, _ = rw.Write([]byte(body))
@@ -443,7 +450,7 @@ func (w *webServer) serve(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	q := r.URL.Query()
-	pageLike := r.URL.Path == "/" || r.URL.Path == "/job" || strings.HasPrefix(r.URL.Path, "/r/")
+	pageLike := r.URL.Path == "/" || r.URL.Path == "/job" || strings.HasPrefix(r.URL.Path, "/r/") || r.URL.Path == "/authorize"
 	if pageLike && q.Get("o") != "" { // a code used once: the cookie, and the same address without it
 		code := q.Get("o")
 		q.Del("o")
@@ -482,9 +489,11 @@ func (w *webServer) serve(rw http.ResponseWriter, r *http.Request) {
 			st = w.said.PubSt
 		}
 		rw.Header().Set("Content-Security-Policy", fmt.Sprintf("default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' data:; frame-src 'self' http://127.0.0.1:%d http://localhost:%d; frame-ancestors 'none'", st, st))
-		sendHTML(rw, 200, pageHTML)
+		sendHTML(rw, 200, pageOfInstance())
 	case r.URL.Path == "/events":
 		w.events(rw, r)
+	case r.URL.Path == "/authorize": // ( the window comes by a view's form, not by a link )
+		sendHTML(rw, http.StatusBadRequest, "<!DOCTYPE html><meta charset=utf-8><title>errand</title><p style='font:14px sans-serif;margin:2em'>this window is opened by a page's <em>Set it up</em> button")
 	case strings.HasPrefix(r.URL.Path, "/r/"): // a run by its directory's name: its page
 		ident := strings.Trim(r.URL.Path[3:], "/")
 		if key := u.runKey(ident); key != "" {
@@ -531,6 +540,16 @@ func (w *webServer) serve(rw http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(rw, "nothing here", http.StatusNotFound)
 	}
+}
+
+// pageOfInstance: the page, its title and header saying the instance when it is not the errand in use where it usually is
+func pageOfInstance() string {
+	if system.Instance() == "main" {
+		return pageHTML
+	}
+	said := "errand [" + system.Instance() + "]"
+	return strings.NewReplacer("<title>errand</title>", "<title>"+said+"</title>",
+		`title="all the runs and machines">errand</a>`, `title="`+html.EscapeString(system.Cache())+`">`+said+`</a>`).Replace(pageHTML)
 }
 
 // startingHTML: the page of a run its machine has not said yet -- it goes there when the events say something came
@@ -814,6 +833,10 @@ func (w *webServer) events(rw http.ResponseWriter, r *http.Request) {
 }
 
 func (w *webServer) post(rw http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == "/authorize" { // a view's form: its origin is the view's ( authorize.go )
+		w.authorizeLanding(rw, r)
+		return
+	}
 	if r.URL.Path != "/login" { // ( the form's own origin is null: the token it carries is the proof there )
 		origin := r.Header.Get("Origin")
 		if u, err := url.Parse(origin); origin == "" || err != nil || u.Host != r.Host {
@@ -834,6 +857,10 @@ func (w *webServer) post(rw http.ResponseWriter, r *http.Request) {
 	}
 	if !w.allowed(r) {
 		http.Error(rw, "no token", http.StatusForbidden)
+		return
+	}
+	if rest, ok := strings.CutPrefix(r.URL.Path, "/authorize/"); ok {
+		w.authorizePost(rw, r, rest)
 		return
 	}
 	var body map[string]any
@@ -1007,21 +1034,6 @@ func (w *webServer) act(u *Ui, body map[string]any) (map[string]any, error) {
 		u.refresh()
 		u.Changed(true, nil)
 		return said(a.Label + " is authorized to no one on " + m.Name())
-	case "authorize": // what a page asked for, given to pages: the command shown in full first
-		r, ok := row.What.(*reach.RefusedRow)
-		if !ok || m == nil || r.Who != "pages" || len(r.Command) == 0 {
-			return nil, errors.New("on a page's request that was refused, whose command is known")
-		}
-		if !sure {
-			return confirm("authorize "+r.What+" to pages on "+m.Name()+"?", []string{"pages that ask for " + r.What + " will start, on " + m.Name() + ":",
-				svc.Typed(r.Command), "as: errand serve authorize --to pages --on " + m.Name() + " " + r.What + " -- " + svc.Typed(r.Command)}, "authorize", false)
-		}
-		if _, err := u.Ask(m, map[string]any{"op": "services_do", "req": map[string]any{"do": "authorize", "page": r.What, "words": r.Command}}); err != nil {
-			return nil, err
-		}
-		u.refresh()
-		u.Changed(true, nil)
-		return said(r.What + " is authorized to pages on " + m.Name())
 	case "kill":
 		list := u.KillList(row)
 		if len(list) == 0 {

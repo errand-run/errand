@@ -15,10 +15,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"runtime"
-	"strconv"
-	"strings"
 
 	"github.com/errand-run/errand/internal/kit"
 	"github.com/errand-run/errand/internal/queue"
@@ -32,6 +29,7 @@ type currentNote struct {
 	Errand  string `json:"errand"`
 	System  string `json:"system"`
 	Host    string `json:"host"`
+	Built   int64  `json:"built,omitempty"`
 }
 
 func binDir() string { return filepath.Join(kit.LocalCache(), "bin") }
@@ -59,7 +57,7 @@ func pointHere() {
 	if st, err := os.Lstat(link); err == nil && st.Mode()&os.ModeSymlink == 0 {
 		return // somebody else's file
 	}
-	mine := currentNote{filepath.Base(filepath.Dir(self)), reach.Release, system.Version, runtime.GOOS + "/" + runtime.GOARCH, queue.Host()}
+	mine := currentNote{filepath.Base(filepath.Dir(self)), reach.Release, system.Version, runtime.GOOS + "/" + runtime.GOARCH, queue.Host(), system.BuiltAt()}
 	if _, err := os.Stat(link); err == nil { // ( a link to a copy that is gone is worth nothing )
 		var was currentNote
 		data, _ := os.ReadFile(note)
@@ -79,7 +77,8 @@ func pointHere() {
 	_ = kit.WriteWholeJSON(note, mine)
 }
 
-// replaces: whether the link goes from `was` to this one. Two of one version ( a build being worked on ): the last to start.
+// replaces: whether the link goes from `was` to this one -- a later release, version, build; two that say no more apart: the last
+// to start
 func (n currentNote) replaces(was currentNote) bool {
 	if was.System != n.System && was.Host != n.Host {
 		return false // a home shared with a machine of another kind, which could not run this one: first come
@@ -87,44 +86,11 @@ func (n currentNote) replaces(was currentNote) bool {
 	if a, b := reach.ReleaseOf(n.Release), reach.ReleaseOf(was.Release); a != b {
 		return a > b
 	}
-	return !versionBefore(n.Errand, was.Errand)
+	if versionBefore(n.Errand, was.Errand) || versionBefore(was.Errand, n.Errand) {
+		return versionBefore(was.Errand, n.Errand)
+	}
+	return n.Built >= was.Built
 }
 
-var versionParts = regexp.MustCompile(`^([0-9.]*[0-9])(?:(a|b|rc)([0-9]+))?(?:\+[a-z]*\.?([0-9]*))?`)
-
-// versionBefore: whether version `a` is an earlier one than `b` ( lib/version.py: 2026.11.25.1, its candidates 2026.11.25.1rc1,
-// what comes after it 2026.11.25.1+dev.3.g3e4580c )
-func versionBefore(a, b string) bool {
-	x, y := versionKey(a), versionKey(b)
-	for i := 0; i < len(x) || i < len(y); i++ {
-		var p, q int
-		if i < len(x) {
-			p = x[i]
-		}
-		if i < len(y) {
-			q = y[i]
-		}
-		if p != q {
-			return p < q
-		}
-	}
-	return false
-}
-
-// versionKey: six numbers for the release, then which candidate ( none: after them all ), then how many commits after
-func versionKey(v string) []int {
-	key := make([]int, 9)
-	m := versionParts.FindStringSubmatch(v)
-	if m == nil {
-		return key
-	}
-	for i, n := range strings.Split(m[1], ".") {
-		if i < 6 {
-			key[i], _ = strconv.Atoi(n)
-		}
-	}
-	key[6] = map[string]int{"a": 1, "b": 2, "rc": 3, "": 4}[m[2]]
-	key[7], _ = strconv.Atoi(m[3])
-	key[8], _ = strconv.Atoi(m[4])
-	return key
-}
+// versionBefore: whether version `a` is an earlier one than `b`
+func versionBefore(a, b string) bool { return system.VersionBefore(a, b) }

@@ -300,3 +300,18 @@ and its port ), and not for what has no errand on its side: a restricted key for
 name that lasts. So the machine's agent, as it starts, points `<cache>/bin/errand` at its own program ( `current.go` ), unless
 the one it names is of a later release or version; the round leaves what it names. Two of one version ( a build being worked on ): the
 last to start. Nothing is installed, and the key stays restricted: a full one, so that its client could send errand, is a shell.
+
+## Amendment, 2026-11-26: which agent is newer
+
+Measured while trying sdot's viewer with errand: an agent that starts retired every agent of a release not after its own, so at one
+release the last program called took the place, and an older one still called somewhere ( a copy in `<cache>/bin`, another env, a path
+in a script ) took it back; two could pass it to each other. Hugo: there is never a reason for `errand agents restart`
+( `grill/page-services-2/decisions.md`, round 4 ).
+
+- Each build is stamped when it is made ( `system.Built`, nanoseconds, by `packaging/backend.py` for every system at once ).
+- Agents are ordered by release, then version ( `VersionBefore`: `2026.11.25.1 < 2026.11.25.1+dev.1.g… < 2026.11.25.2` ), then the stamp. A
+  build without a stamp ( a `go build` by hand ) comes before any build that has one.
+- An agent that starts retires only those that come before it. A program called with an agent in place that does not come before it, of
+  its release, uses that agent rather than start its own; of a later release, it is told to update, as before. Two that say no more
+  apart: the one in place stays.
+- The stable name follows the same order; two of one version and one stamp, as before, the last to start.

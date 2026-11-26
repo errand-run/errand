@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/errand-run/errand/internal/kit"
+	"github.com/errand-run/errand/internal/system"
 )
 
 type keptUnit struct {
@@ -44,13 +45,19 @@ func keptUnits() map[string]keptUnit {
 
 func KeptPort(label string) int { return keptUnits()[label].Port }
 
-const (
-	WebLabel    = "dev.errand.page"
-	StoresLabel = "dev.errand.stores"
-)
+// Label: a unit of errand's, by its name and this instance's ( dev.errand.page, dev.errand-try.page )
+func Label(name string) string {
+	if inst := system.Instance(); inst != "main" {
+		return "dev.errand-" + inst + "." + name
+	}
+	return "dev.errand." + name
+}
+
+func WebLabel() string    { return Label("page") }
+func StoresLabel() string { return Label("stores") }
 
 // KeptPorts: the page's and the stores', when the system keeps them
-func KeptPorts() [2]int { return [2]int{KeptPort(WebLabel), KeptPort(StoresLabel)} }
+func KeptPorts() [2]int { return [2]int{KeptPort(WebLabel()), KeptPort(StoresLabel())} }
 
 // Refused: why the system keeps nothing here; "": it can
 func Refused() string {
@@ -75,7 +82,7 @@ func Refused() string {
 
 func keepEnviron() map[string]string {
 	out := map[string]string{}
-	for _, k := range []string{"PATH", "HOME", "ERRAND_CACHE_DIR", "XDG_CONFIG_HOME", "XDG_RUNTIME_DIR", "ERRAND_DECLARE_PYTHON", "PYTHONPATH"} {
+	for _, k := range []string{"PATH", "HOME", "ERRAND_CACHE_DIR", "ERRAND_INSTANCE", "XDG_CONFIG_HOME", "XDG_RUNTIME_DIR", "ERRAND_DECLARE_PYTHON", "PYTHONPATH"} {
 		if v := os.Getenv(k); v != "" {
 			out[k] = v
 		}
@@ -201,6 +208,34 @@ func UnkeepPort(label string) bool {
 	b, _ := json.MarshalIndent(all, "", " ")
 	_ = kit.WriteWhole(keptFile(), string(b))
 	return was
+}
+
+// UnkeepAll: every unit whose label begins with `prefix` given back, whoever's file says it ( an instance removed )
+func UnkeepAll(prefix string) {
+	home, _ := os.UserHomeDir()
+	if runtime.GOOS == "darwin" {
+		plists, _ := filepath.Glob(filepath.Join(home, "Library", "LaunchAgents", prefix+"*.plist"))
+		for _, p := range plists {
+			label := strings.TrimSuffix(filepath.Base(p), ".plist")
+			_ = exec.Command("launchctl", "bootout", fmt.Sprintf("gui/%d/%s", os.Getuid(), label)).Run()
+			_ = os.Remove(p)
+		}
+		return
+	}
+	base := os.Getenv("XDG_CONFIG_HOME")
+	if base == "" {
+		base = filepath.Join(home, ".config")
+	}
+	files, _ := filepath.Glob(filepath.Join(base, "systemd", "user", prefix+"*"))
+	for _, f := range files {
+		if strings.HasSuffix(f, ".socket") {
+			_ = exec.Command("systemctl", "--user", "disable", "--now", filepath.Base(f)).Run()
+		}
+		_ = os.Remove(f)
+	}
+	if len(files) > 0 {
+		_ = exec.Command("systemctl", "--user", "daemon-reload").Run()
+	}
 }
 
 // InheritedListener: in a program the system started for its port, the listening socket

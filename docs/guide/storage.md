@@ -73,8 +73,11 @@ Each layer that builds something says where it goes:
 
 ## The per-user directory: `~/.cache/errand/`
 
+It holds one directory per errand of yours on the machine, an **instance**: `main/`, the one in use, and others you make to
+try a build ( `ERRAND_INSTANCE`, below ). Each has its stable name in it: `main/bin/errand`, the name a restricted key forces.
+
 ```text
-~/.cache/errand/
+~/.cache/errand/main/
   src/<key>/         errand's sources, on a machine reached by Ssh: about 1 MB per checkout that sent them
   bin/               the programs, one directory per version, and `errand`, a link to the one in use
   python/            a Python for errand alone, when the machine had no usable one
@@ -106,6 +109,24 @@ machine ( `~/.bashrc`, `~/.zshrc` ):
 ```bash
 export ERRAND_CACHE_DIR=/work/me/errand-cache
 ```
+
+### Another errand beside the one in use: `ERRAND_INSTANCE`
+
+```bash
+ERRAND_INSTANCE=try errand run …      # or export it in one terminal, to try a build there
+errand instances                      # those of this account here, their size, whether they run
+errand instances remove try           # its agents, page and units stopped, here and where it went; its directories gone
+```
+
+Everything of errand's has the instance's name: its directory ( `~/.cache/errand/try` ), its configuration
+( `~/.config/errand/try` ), its sockets, its units, its page ( on a port of its own ), and the same on the machines it
+reaches: an instance never replaces the agent, the services, nor the stable name of another. The machine's queue stays one: a
+card is one. The projects do not change: a run made by an instance is a run of the project, and its `result.json` says the
+instance. Any command typed in a terminal says it first, when it is not main ( `errand [try]: ~/.cache/errand/try` ), and so
+does the page's header: a variable left in a terminal never changes errand without a word.
+
+The directory of before instances moves into `main/` by itself, the first time no agent nor page of it runs; a rename,
+nothing copied.
 
 The variable is a setting of the machine, not of a project: the agents on a machine serve every project that
 reaches it. errand reads it over there through the same interactive shell it runs every remote

@@ -71,7 +71,7 @@ func PageOf(leaf string) string {
 	if s, ok := WebNow(); ok {
 		return s.Url() + "r/" + RunIdent(leaf)
 	}
-	if p := units.KeptPort(units.WebLabel); p > 0 {
+	if p := units.KeptPort(units.WebLabel()); p > 0 {
 		return fmt.Sprintf("http://127.0.0.1:%d/r/%s", p, RunIdent(leaf))
 	}
 	return ""

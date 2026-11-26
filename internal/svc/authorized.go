@@ -25,20 +25,19 @@ import (
 
 	"github.com/errand-run/errand/internal/kit"
 	"github.com/errand-run/errand/internal/queue"
+	"github.com/errand-run/errand/internal/system"
 )
 
 // Authorization is one definition, and to whom it is given.
 type Authorization struct {
 	Hash       string         `json:"-"`
 	Label      string         `json:"label"`
-	Definition map[string]any `json:"definition"`           // as `errand serve --spec -` reads it
-	To         []string       `json:"to"`                   // "pages", "key:NAME"
-	Page       string         `json:"page,omitempty"`       // for pages: NAME#VERSION, as the store says it
-	Provider   string         `json:"provider,omitempty"`   // the description of the package that gives that version here
-	Unverified bool           `json:"unverified,omitempty"` // no package here gives that version: as it was typed
-	Dev        string         `json:"dev,omitempty"`        // NAME#dev: the checkout it runs from
-	DevSig     string         `json:"dev_sig,omitempty"`
-	Pinned     bool           `json:"pinned,omitempty"` // its version is kept out of `errand serve prune`
+	Definition map[string]any `json:"definition"`          // as `errand serve --spec -` reads it
+	To         []string       `json:"to"`                  // "pages", "key:NAME"
+	Page       string         `json:"page,omitempty"`      // for pages: NAME~HASH, the description's ( ADR 0041 )
+	Described  map[string]any `json:"described,omitempty"` // ... that description, as the page sent it
+	Dev        string         `json:"dev,omitempty"`       // ... in development: the checkout it runs from
+	Pinned     bool           `json:"pinned,omitempty"`    // kept out of `errand serve prune`
 	Since      string         `json:"since"`
 	Used       string         `json:"used,omitempty"`
 }
@@ -55,20 +54,12 @@ func CheckTo(to string) error {
 	return nil
 }
 
-// configDir: errand's, of this user ( `$XDG_CONFIG_HOME/errand` )
+// configDir: errand's, of this user and instance ( `$XDG_CONFIG_HOME/errand/<instance>` )
 func configDir(environ []string) string {
 	if len(environ) == 0 {
 		environ = os.Environ()
 	}
-	base, _ := kit.EnvOf(environ, "XDG_CONFIG_HOME")
-	if base == "" {
-		home, _ := kit.EnvOf(environ, "HOME")
-		if home == "" {
-			home, _ = os.UserHomeDir()
-		}
-		base = filepath.Join(home, ".config")
-	}
-	return filepath.Join(base, "errand")
+	return system.ConfigDir(environ, kit.EnvOf)
 }
 
 func AuthorizedFile() string { return filepath.Join(configDir(nil), "authorized-services.json") }
@@ -207,13 +198,7 @@ func (a Authorization) Spec() (ServiceSpec, error) {
 		return s, fmt.Errorf("authorization %s: it names a machine ( %s ): what is authorized runs where it is written", a.Hash, machine)
 	}
 	s.Label, s.Name = a.Label, a.Label
-	if a.Page != "" {
-		s.Name = a.Page
-	}
-	s.Source, s.Provider = "authorized", nil
-	if a.Provider != "" {
-		s.Provider = a.Provider
-	}
+	s.Source = "authorized"
 	s.Complete()
 	return s, nil
 }
@@ -228,10 +213,7 @@ func Authorize(s ServiceSpec, to string, how Authorization) (string, error) {
 		return "", err
 	}
 	if (to == "pages") != (how.Page != "") {
-		return "", errors.New("a page asks for NAME#VERSION, and only a page does: --to pages NAME#VERSION")
-	}
-	if how.Page != "" {
-		s.Label, s.Name = how.Page, how.Page
+		return "", errors.New("a page describes what it asks for, and only a page does: --to pages --spec -, the description on stdin")
 	}
 	s.Complete()
 	if err := s.Check(); err != nil {
@@ -273,7 +255,7 @@ func Authorize(s ServiceSpec, to string, how Authorization) (string, error) {
 			a.To = append(a.To, to)
 		}
 		if how.Page != "" {
-			a.Page, a.Provider, a.Unverified, a.Dev, a.DevSig = how.Page, how.Provider, how.Unverified, how.Dev, how.DevSig
+			a.Page, a.Described, a.Dev = how.Page, how.Described, how.Dev
 		}
 		return nil
 	})
@@ -316,7 +298,7 @@ func AuthorizedTo(hash, to string) (ServiceSpec, *Authorization, error) {
 	return s, a, err
 }
 
-// PageAuthorized: what pages may ask for here, by `NAME#VERSION`
+// PageAuthorized: what pages may ask for here, by `NAME~HASH`
 func PageAuthorized() map[string]*Authorization {
 	all, _ := Authorized()
 	out := map[string]*Authorization{}
@@ -328,7 +310,7 @@ func PageAuthorized() map[string]*Authorization {
 	return out
 }
 
-// PageServices: the servers pages may ask for here, by `NAME#VERSION`, and what cannot be read
+// PageServices: the servers pages may ask for here, by `NAME~HASH`, and what cannot be read
 func PageServices() (map[string]ServiceSpec, []string) {
 	out, said := map[string]ServiceSpec{}, []string{}
 	if _, err := Authorized(); err != nil {
@@ -396,62 +378,4 @@ func dropPage(key string) error {
 func parseStamp(s string) time.Time {
 	t, _ := time.ParseInLocation(stamp, s, time.Local)
 	return t
-}
-
-// ── refused ──────────────────────────────────────────────────────────────────
-
-// Refusal is what was asked for here and not authorized: the last ones are kept, for the page.
-type Refusal struct {
-	Who     string   `json:"who"`  // "pages", "key:NAME", "connect"
-	What    string   `json:"what"` // a hash, or NAME#VERSION
-	Why     string   `json:"why"`
-	From    string   `json:"from,omitempty"`    // the page's directory
-	Command []string `json:"command,omitempty"` // what would run, when it is known here
-	At      float64  `json:"at"`
-	Times   int      `json:"times"`
-}
-
-const refusalsKept = 20
-
-func refusedFile() string { return filepath.Join(kit.LocalCache(), "refused-services.json") }
-
-var refusing sync.Mutex
-
-// Refuse: kept, the latest first; the same asked again is counted
-func Refuse(r Refusal) {
-	refusing.Lock()
-	defer refusing.Unlock()
-	was := Refused()
-	r.At, r.Times = kit.Seconds(time.Now()), 1
-	out := []Refusal{r}
-	for _, o := range was {
-		if o.Who == r.Who && o.What == r.What && o.From == r.From {
-			out[0].Times += o.Times
-			continue
-		}
-		if len(out) < refusalsKept {
-			out = append(out, o)
-		}
-	}
-	b, _ := json.Marshal(out)
-	_ = os.MkdirAll(filepath.Dir(refusedFile()), 0o700)
-	_ = os.WriteFile(refusedFile(), b, 0o600)
-}
-
-// Refused: the last refusals, the latest first -- those since authorized left out
-func Refused() []Refusal {
-	var was []Refusal
-	if data, err := os.ReadFile(refusedFile()); err == nil {
-		_ = json.Unmarshal(data, &was)
-	}
-	all, _ := Authorized()
-	pages := PageAuthorized()
-	out := []Refusal{}
-	for _, r := range was {
-		if a := all[r.What]; pages[r.What] != nil || a != nil && (r.Who == "connect" || slices.Contains(a.To, r.Who)) {
-			continue
-		}
-		out = append(out, r)
-	}
-	return out
 }

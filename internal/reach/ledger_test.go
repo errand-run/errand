@@ -75,3 +75,26 @@ func TestTheIdIsKept(t *testing.T) {
 		t.Errorf("%+v", ms)
 	}
 }
+
+// A job handed to Slurm from cinaps, running on node14: node14 says it when it is asked, cinaps otherwise.
+func TestAJobIsSaidWhereItRuns(t *testing.T) {
+	login := func() *OverviewDoc {
+		return &OverviewDoc{Host: "cinaps2", Rows: []TableRow{{ID: "r1", State: "running", Slurm: "50029"}, {ID: "r2", State: "running"}},
+			Kept: []KeptRow{{Kind: "allocation", ID: "50029", On: "node14"}, {Kind: "allocation", ID: "50030"}}}
+	}
+	node := &OverviewDoc{Host: "node14", Rows: []TableRow{{ID: "r1", State: "running"}}, Kept: []KeptRow{{Kind: "allocation", ID: "50029", On: "node14"}}}
+	got := Elsewhere([]*OverviewDoc{login(), node, nil})
+	if want := map[string]bool{"run:r1": true, "alloc:50029": true}; len(got[0]) != 2 || !got[0]["run:r1"] || !got[0]["alloc:50029"] {
+		t.Errorf("the login node: %v, want %v", got[0], want)
+	}
+	if len(got[1]) != 0 || len(got[2]) != 0 {
+		t.Errorf("the node: %v; nothing: %v", got[1], got[2])
+	}
+	if got := Elsewhere([]*OverviewDoc{login(), nil}); len(got[0]) != 0 {
+		t.Errorf("its node not asked: the login node says it all, %v", got[0])
+	}
+	said := Once([]machineSaid{{Doc: *login()}, {Doc: *node}})
+	if len(said[0].Doc.Rows) != 1 || said[0].Doc.Rows[0].ID != "r2" || len(said[0].Doc.Kept) != 1 || len(said[1].Doc.Rows) != 1 {
+		t.Errorf("%+v", said)
+	}
+}

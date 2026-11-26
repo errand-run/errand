@@ -62,7 +62,7 @@ errand.envs[ "win" ] = errand.Env( [ errand.Ssh( host = "winbox", options = [ "-
 		t.Fatalf("one that is not set up: %d %q %q", o.code, o.out, o.err)
 	}
 	log := read(t, filepath.Join(guest, "log"))
-	if !strings.Contains(log, "-p 2222") || !strings.Contains(log, "scp -q -P 2222 ") || !strings.Contains(log, "winbox:C:/errand/cache/bin/") {
+	if !strings.Contains(log, "-p 2222") || !strings.Contains(log, "scp -q -P 2222 ") || !strings.Contains(log, "winbox:C:/errand/cache/main/bin/") {
 		t.Errorf("how it was reached: %s", log)
 	}
 	if o = p.errand("", "envs"); !strings.Contains(o.out, "not built") || !strings.Contains(o.out, "windows-box:winbox -> vars") {

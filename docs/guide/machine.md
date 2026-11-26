@@ -157,10 +157,19 @@ that must not start before the benchmarks are done.
 
 ## First come, first served
 
-Every request that waits is recorded, and **the oldest goes first**: whatever arrives after a queued
-request waits behind it, even when it would fit now. Otherwise a steady stream of small runs would
-starve a benchmark, or a [service](./serve) waiting for a card, for ever. A claim waiting to grow
-( `errand.require` ) is ahead of everything. A request whose process is gone is dropped at once.
+Every request that waits is recorded, and **the oldest goes first, for what it waits for**. What a
+request that waits asked is kept for it: a later request passes it only with what is left
+( [ADR 0042](https://github.com/errand-run/errand/blob/main/docs/adr/0042-a-request-that-waits-keeps-its-place-for-what-it-waits-for.md) ).
+
+- A test that takes no card passes a run that waits for one, as long as it leaves that run the
+  `cpus` and `ram` it asked for.
+- A request that needs a card waits behind any request ahead that needs one too.
+- What wants the machine to itself ( `--exclusive`, or more of something than the machine has ) is
+  passed by nothing, and waits behind everything ahead.
+
+So a steady stream of small runs never starves a benchmark, or a [service](./serve) waiting for a
+card: nothing that passes it takes what it waits for. A claim waiting to grow ( `errand.require` ) is
+ahead of everything. A request whose process is gone is dropped at once.
 
 ## A card is assigned, not merely counted
 

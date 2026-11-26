@@ -166,19 +166,19 @@ func overview(self *Place) reach.OverviewDoc {
 	out.Kept = append(out.Kept, unowned()...)
 	out.Rows = onceEach(out.Rows)
 	out.Rested = rested(out.Serving)
-	out.Authorized, out.Refused = authorizedRows()
+	out.Authorized = authorizedRows()
 	return out
 }
 
-// authorizedRows: what pages and keys may ask for here, and what they were refused lately
-func authorizedRows() ([]reach.AuthRow, []reach.RefusedRow) {
+// authorizedRows: what pages and keys may ask for here
+func authorizedRows() []reach.AuthRow {
 	all, err := svc.Authorized()
 	var auth []reach.AuthRow
 	if err != nil {
 		auth = append(auth, reach.AuthRow{Hash: "?", Label: svc.AuthorizedFile(), Error: err.Error()})
 	}
 	for h, a := range all {
-		row := reach.AuthRow{Hash: h, Label: a.Label, To: a.To, Page: a.Page, Since: a.Since, Used: a.Used, Command: a.Command(), Unverified: a.Unverified, Dev: a.Dev}
+		row := reach.AuthRow{Hash: h, Label: a.Label, To: a.To, Page: a.Page, Since: a.Since, Used: a.Used, Command: a.Command(), Text: kit.Text(a.Described["text"]), Dev: a.Dev}
 		if s, err := a.Spec(); err != nil {
 			row.Error = err.Error()
 		} else {
@@ -187,11 +187,7 @@ func authorizedRows() ([]reach.AuthRow, []reach.RefusedRow) {
 		auth = append(auth, row)
 	}
 	sort.Slice(auth, func(i, j int) bool { return auth[i].Label+auth[i].Hash < auth[j].Label+auth[j].Hash })
-	var refused []reach.RefusedRow
-	for _, r := range svc.Refused() {
-		refused = append(refused, reach.RefusedRow{Who: r.Who, What: r.What, Why: r.Why, From: r.From, Command: r.Command, At: r.At, Times: r.Times})
-	}
-	return auth, refused
+	return auth
 }
 
 // onceEach: a run handed to a batch system is known by the agent that handed it and by its node's: one row of it
@@ -218,6 +214,8 @@ func onceEach(rows []reach.TableRow) []reach.TableRow {
 	return out
 }
 
+// allocationsKept: the allocations of the machine that asked for them, and of the node they run on -- not of every
+// machine that sees the disk they are on: a cluster's login nodes and nodes share it
 func allocationsKept() []reach.KeptRow {
 	var out []reach.KeptRow
 	dirs, _ := filepath.Glob(filepath.Join(allocsDir(), "*"))
@@ -227,7 +225,7 @@ func allocationsKept() []reach.KeptRow {
 			continue
 		}
 		st, why, node, left := slurmSays(al.Slurm)
-		if st == "" {
+		if st == "" || (al.From != "" && al.From != queue.Host() && node != queue.Host()) {
 			continue
 		}
 		text := "slurm job " + al.Slurm + " " + strings.ToLower(st)
@@ -240,7 +238,7 @@ func allocationsKept() []reach.KeptRow {
 		if why != "" && why != "None" {
 			text += " ( " + why + " )"
 		}
-		out = append(out, reach.KeptRow{Kind: "allocation", ID: al.Slurm, Text: text})
+		out = append(out, reach.KeptRow{Kind: "allocation", ID: al.Slurm, Text: text, On: node})
 	}
 	return out
 }

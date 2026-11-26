@@ -5,19 +5,18 @@ package command
 
 import (
 	"errors"
-	"fmt"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/errand-run/errand/internal/kit"
 	"github.com/errand-run/errand/internal/layer"
 	"github.com/errand-run/errand/internal/reach"
 	"github.com/errand-run/errand/internal/svc"
+	"github.com/errand-run/errand/internal/system"
 )
 
 const authorizeUsage = `errand serve authorize --to key:NAME [--on M] [options] -- COMMAND
-errand serve authorize [--to pages] [--on M] [options] NAME#VERSION [-- WORDS]`
+errand serve authorize --to pages [--on M] [--path TOOL=PATH] [--source URL] [--yes] --spec -    ( a page's description on stdin )`
 
 // serveAuthorize: a server given to a key or to pages, on the machine it runs on
 func serveAuthorize(t *reach.Term, o serveOptions, words []string) int {
@@ -25,18 +24,15 @@ func serveAuthorize(t *reach.Term, o serveOptions, words []string) int {
 		t.Sayln("errand serve authorize:", strings.TrimPrefix(err.Error(), "this machine's agent: "))
 		return 1
 	}
-	if o.to == "" && len(words) == 1 {
-		o.to = "pages"
-	}
 	switch {
-	case len(words) > 1 || len(words) == 0 && len(o.command) == 0 && o.request == "":
+	case len(words) > 0 || len(o.command) == 0 && o.request == "":
 		t.Sayln(authorizeUsage)
 		return 2
 	case o.to == "":
-		t.Sayln("errand serve authorize: to whom? --to key:NAME, or --to pages NAME#VERSION")
+		t.Sayln("errand serve authorize: to whom? --to key:NAME, or --to pages")
 		return 2
-	case len(words) == 1 && o.to != "pages":
-		t.Sayln("errand serve authorize: a page asks for NAME#VERSION, and only a page does: --to pages")
+	case o.to == "pages" && (o.request == "" || len(o.command) > 0):
+		t.Sayln("errand serve authorize: a page describes its service: --to pages --spec -, the description on stdin ( ADR 0041 )")
 		return 2
 	}
 	if err := svc.CheckTo(o.to); err != nil {
@@ -46,8 +42,8 @@ func serveAuthorize(t *reach.Term, o serveOptions, words []string) int {
 	if on == "" {
 		on = "here"
 	}
-	if len(words) == 1 { // a page's service
-		return authorizePage(t, o, words[0], on, fail)
+	if o.to == "pages" {
+		return authorizePage(t, o, on, fail)
 	}
 	o.words = nil // ( `authorize` names nothing )
 	spec, err := askedInFull(t, o)
@@ -69,76 +65,80 @@ func serveAuthorize(t *reach.Term, o serveOptions, words []string) int {
 	t.Printf("%s  %s authorized to %s on %s   %s\n", hash, there.Name, o.to, on, svc.Typed(there.Command))
 	if name, ok := strings.CutPrefix(o.to, "key:"); ok {
 		t.Println("  in ~/.ssh/authorized_keys there, for the key " + name + ", one of:")
-		t.Println(`    restrict,command="~/.cache/errand/bin/errand there --only ` + o.to + `" ssh-ed25519 …      ( an errand on the other side )`)
-		t.Println(`    restrict,command="~/.cache/errand/bin/errand serve connect ` + hash + `" ssh-ed25519 …      ( this server alone, by its standard input )`)
+		stable := "~/.cache/errand/" + system.Instance() + "/bin/errand" // ( the instance's stable name there; its directory, where it is declared elsewhere )
+		t.Println(`    restrict,command="` + stable + ` there --only ` + o.to + `" ssh-ed25519 …      ( an errand on the other side )`)
+		t.Println(`    restrict,command="` + stable + ` serve connect ` + hash + `" ssh-ed25519 …      ( this server alone, by its standard input )`)
 	}
 	return 0
 }
 
-func authorizePage(t *reach.Term, o serveOptions, key, on string, fail func(error) int) int {
-	if !strings.Contains(key, "#") {
-		t.Sayln(authorizeUsage)
-		return 2
-	}
-	req := map[string]any{"do": "authorize", "page": key}
-	needs := map[string]any{}
-	for k, v := range o.spec.Needs {
-		needs[k] = v
-	}
-	if o.spec.Idle != 600 {
-		needs["idle"] = o.spec.Idle
-	}
-	if o.spec.Grace != 10 {
-		needs["grace"] = o.spec.Grace
-	}
-	if o.spec.Keep > 0 {
-		needs["keep"] = o.spec.Keep
-	}
-	if len(o.spec.Env) > 0 {
-		needs["vars"] = o.spec.Env
-	}
-	if o.spec.Cwd != "" {
-		needs["cwd"] = o.spec.Cwd
-	}
-	if o.spec.Busy != nil {
-		needs["busy"] = o.spec.Busy
-	}
-	if o.spec.Exclusive {
-		needs["exclusive"] = true
-	}
-	if len(needs) > 0 {
-		req["needs"] = needs
-	}
-	if len(o.command) > 0 {
-		req["words"] = o.command
-	} else { // composed from the package there: shown, then asked
-		composed, err := o.asked(t, map[string]any{"do": "compose", "key": key})
-		if err != nil {
-			return fail(err)
-		}
-		t.Println(kit.Text(composed["text"]))
-		if !o.yes {
-			answer, ok := "", false
-			if t.TtyIn && t.TtyOut {
-				answer, ok = t.Ask("authorize it to pages? [y/N] ")
-			}
-			if answer = strings.ToLower(answer); !ok || (answer != "y" && answer != "yes" && answer != "o" && answer != "oui") {
-				t.Println("not authorized")
-				return 1
-			}
+// authorizePage: a page's description, shown as the machine would run it, then authorized there once a person said yes
+func authorizePage(t *reach.Term, o serveOptions, on string, fail func(error) int) int {
+	var data []byte
+	for more := true; more; {
+		var b []byte
+		select {
+		case b, more = <-t.Stdin:
+			data = append(data, b...)
+		case <-t.Gone:
+			return 1
 		}
 	}
-	got, err := o.asked(t, req)
+	d, _, err := svc.ParsePageDesc(data)
 	if err != nil {
 		return fail(err)
 	}
-	var au svc.Authorization
-	_ = reach.DecodeInto(got["authorization"], &au)
-	note := ""
-	if au.Unverified {
-		note = "   unverified: no package there provides this version"
+	paths := map[string][]string{}
+	for _, p := range o.paths {
+		tool, at, _ := strings.Cut(p, "=")
+		paths[tool] = append(paths[tool], at)
 	}
-	t.Printf("%s  %s authorized to pages on %s   %s%s\n", kit.Text(got["hash"]), key, on, svc.Typed(au.Command()), note)
+	got, err := o.asked(t, map[string]any{"do": "page_look", "described": d, "paths": paths})
+	if err != nil {
+		return fail(err)
+	}
+	var l svc.PageLook
+	if err := reach.DecodeInto(got["look"], &l); err != nil {
+		return fail(err)
+	}
+	t.Printf("%s on %s: %s\n", l.Key, on, l.State)
+	for _, f := range l.Found {
+		t.Println("  · " + f)
+	}
+	for _, n := range l.Missing {
+		from := ""
+		if n.Source != "" {
+			from = "  from " + n.Source
+			if !n.Trusted {
+				from += "  ( an unknown source: --source " + n.Source + " to accept it )"
+			}
+		}
+		t.Println("  + " + n.What + from)
+	}
+	for _, p := range l.Probes {
+		t.Printf("  ? %s: errand serve probe --on %s -- %s\n", p.Tool, on, svc.Typed(p.Argv))
+	}
+	switch l.State {
+	case "unavailable":
+		return fail(errors.New(l.Why))
+	case "authorized":
+		return 0
+	}
+	t.Println("  runs: " + svc.Typed(l.Command))
+	if !o.yes {
+		answer, ok := "", false
+		if t.TtyIn && t.TtyOut {
+			answer, ok = t.Ask("fetch what is missing, and authorize it to pages? [y/N] ")
+		}
+		if answer = strings.ToLower(answer); !ok || (answer != "y" && answer != "yes" && answer != "o" && answer != "oui") {
+			t.Println("not authorized ( --yes to say it beforehand )")
+			return 1
+		}
+	}
+	if got, err = o.asked(t, map[string]any{"do": "authorize", "described": d, "paths": paths, "source_ok": o.sources}); err != nil {
+		return fail(err)
+	}
+	t.Printf("%s authorized to pages on %s\n", l.Key, on)
 	return 0
 }
 
@@ -195,22 +195,6 @@ func serveAuthorized(t *reach.Term, o serveOptions, verb string, words []string)
 			t.Println("      " + err.Error())
 		} else {
 			t.Println("      " + authorizedText(s))
-		}
-	}
-	var refused []svc.Refusal
-	_ = reach.DecodeInto(got["refused"], &refused)
-	if len(refused) > 0 {
-		t.Println("refused lately:")
-	}
-	for _, r := range refused {
-		at := time.Unix(int64(r.At), 0).Format("2006-01-02 15:04")
-		times := ""
-		if r.Times > 1 {
-			times = fmt.Sprintf(" ( %d times )", r.Times)
-		}
-		t.Printf("  %s  %s asked for %s%s: %s\n", at, r.Who, r.What, times, kit.FirstLine(r.Why))
-		if len(r.Command) > 0 {
-			t.Println("      would run: " + svc.Typed(r.Command))
 		}
 	}
 	return 0

@@ -309,10 +309,10 @@ func serveMain(t *reach.Term, args []string) int {
 			return serveConfig(t, o, verb, rest)
 		case "authorized", "withdraw":
 			return serveAuthorized(t, o, verb, rest)
-		case "install":
-			t.Sayln("errand serve install: gone; a page's service is authorized: errand serve authorize --to pages NAME#VERSION [-- WORDS]")
+		case "install", "look":
+			t.Sayln("errand serve " + verb + ": gone; a page describes its service, and a person authorizes it in errand's page, or with errand serve authorize --to pages --spec - ( ADR 0041 )")
 			return 2
-		case "look", "fetch", "probe":
+		case "fetch", "probe":
 			return pageServicesMain(t, verb, o, rest)
 		case "pin", "unpin", "prune":
 			return versionsMain(t, o)

@@ -287,8 +287,8 @@ func (a *Place) inside(stack []project.Layer, root string, tags map[string]any, 
 	if os.Getenv("ERRAND_CACHE_DIR") != "" { // errand's directory, when it is not in the home an image is given
 		binds = append(binds, kit.LocalCache())
 	}
-	if st, err := os.Stat(fmt.Sprintf("/tmp/errand-%d", os.Getuid())); err == nil && st.IsDir() {
-		binds = append(binds, fmt.Sprintf("/tmp/errand-%d", os.Getuid()))
+	if st, err := os.Stat(kit.ShortDir()); err == nil && st.IsDir() {
+		binds = append(binds, kit.ShortDir())
 	}
 	cmd, err := layer.Enter(stack[at], ctx, binds, []string{kit.SelfPath(), "place", "--dir", dir, "--inside", "--parent", a.Dir})
 	if err == nil {

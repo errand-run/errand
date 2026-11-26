@@ -115,6 +115,7 @@ type allocation struct {
 	Tasks     int     `json:"tasks"` // how many ranks it has room for
 	Keep      float64 `json:"keep"`  // seconds it stays with nothing running in it
 	Made      float64 `json:"made"`
+	From      string  `json:"from,omitempty"` // the machine that asked for it ( queue.Host ); "": an errand that did not say
 }
 
 func allocsDir() string { return filepath.Join(kit.LocalCache(), "allocations") }
@@ -369,7 +370,7 @@ func (a *Place) submit(s runinfo.LaunchSpec, at int, id, leaf, label, root, cwd 
 			return fmt.Errorf("the run could not be submitted: %s", strings.TrimSpace(said.String()+" "+string(out)))
 		}
 		al = want
-		al.Slurm = number
+		al.Slurm, al.From = number, queue.Host()
 		if err := kit.WriteRecord(filepath.Join(dir, "alloc.json"), al); err != nil {
 			return err
 		}

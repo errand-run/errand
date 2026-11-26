@@ -64,6 +64,44 @@ type KeptRow struct {
 	ID   string `json:"id,omitempty"`
 	Text string `json:"text"`
 	Pid  int    `json:"pid,omitempty"`
+	On   string `json:"on,omitempty"` // an allocation: the node it runs on
+}
+
+// Elsewhere: what a machine says that runs on another of those asked, which says it too -- a run handed to a batch
+// system ( known by the login node that handed it and by its node's agent ), an allocation ( listed by the login node
+// that asked for it and by its node ). The machine it runs on says it; the login node only while its node is not
+// asked. -> for each overview, the runs and the allocations it is not to show ( "run:"+ID, "alloc:"+ID )
+func Elsewhere(docs []*OverviewDoc) []map[string]bool {
+	held, hosts := map[string]int{}, map[string]int{}
+	for i, d := range docs {
+		if d == nil {
+			continue
+		}
+		hosts[d.Host] = i
+		for _, r := range d.Rows {
+			if r.Slurm == "" {
+				held[r.ID] = i
+			}
+		}
+	}
+	out := make([]map[string]bool, len(docs))
+	for i, d := range docs {
+		out[i] = map[string]bool{}
+		if d == nil {
+			continue
+		}
+		for _, r := range d.Rows {
+			if at, ok := held[r.ID]; ok && r.Slurm != "" && at != i {
+				out[i]["run:"+r.ID] = true
+			}
+		}
+		for _, k := range d.Kept {
+			if at, ok := hosts[k.On]; ok && k.Kind == "allocation" && k.On != d.Host && at != i {
+				out[i]["alloc:"+k.ID] = true
+			}
+		}
+	}
+	return out
 }
 
 type OverviewDoc struct {
@@ -80,7 +118,6 @@ type OverviewDoc struct {
 	Leases     []LeaseRow   `json:"leases,omitempty"`
 	Rested     []ServingRow `json:"rested,omitempty"`     // the services that ran here and do not now ( apart: a row of Serving is one that is held )
 	Authorized []AuthRow    `json:"authorized,omitempty"` // what pages and keys may ask for here ( ADR 0040 )
-	Refused    []RefusedRow `json:"refused,omitempty"`    // what they asked for lately, and were refused
 	VMs        []VmRow      `json:"vms"`
 	Shared     bool         `json:"shared,omitempty"` // errand leaves nothing there
 }
@@ -116,32 +153,21 @@ type ServingRow struct {
 
 // AuthRow is a server authorized to pages or to a key ( svc/authorized.go ).
 type AuthRow struct {
-	Hash       string            `json:"hash"`
-	Label      string            `json:"label"`
-	To         []string          `json:"to"`
-	Page       string            `json:"page,omitempty"`
-	Since      string            `json:"since"`
-	Used       string            `json:"used,omitempty"`
-	Command    []string          `json:"command"`
-	Vars       map[string]string `json:"vars,omitempty"` // ( those that hold a secret aside )
-	Needs      string            `json:"needs,omitempty"`
-	Cwd        string            `json:"cwd,omitempty"`
-	Idle       float64           `json:"idle,omitempty"`
-	Keep       float64           `json:"keep,omitempty"`
-	Unverified bool              `json:"unverified,omitempty"`
-	Dev        string            `json:"dev,omitempty"`
-	Error      string            `json:"error,omitempty"` // what cannot be read of it
-}
-
-// RefusedRow is something asked for here that was not authorized.
-type RefusedRow struct {
-	Who     string   `json:"who"`
-	What    string   `json:"what"`
-	Why     string   `json:"why"`
-	From    string   `json:"from,omitempty"`
-	Command []string `json:"command,omitempty"` // what would run, when it is known there
-	At      float64  `json:"at"`
-	Times   int      `json:"times"`
+	Hash    string            `json:"hash"`
+	Label   string            `json:"label"`
+	To      []string          `json:"to"`
+	Page    string            `json:"page,omitempty"`
+	Since   string            `json:"since"`
+	Used    string            `json:"used,omitempty"`
+	Command []string          `json:"command"`
+	Vars    map[string]string `json:"vars,omitempty"` // ( those that hold a secret aside )
+	Needs   string            `json:"needs,omitempty"`
+	Cwd     string            `json:"cwd,omitempty"`
+	Idle    float64           `json:"idle,omitempty"`
+	Keep    float64           `json:"keep,omitempty"`
+	Text    string            `json:"text,omitempty"` // a page's: what its description says it does
+	Dev     string            `json:"dev,omitempty"`
+	Error   string            `json:"error,omitempty"` // what cannot be read of it
 }
 
 // LeaseRow is a lease an agent listens for ( agent/lease.go ).

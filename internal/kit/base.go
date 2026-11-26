@@ -131,9 +131,9 @@ func SockAddress(path string) (string, error) {
 	if len(path) < 100 {
 		return path, nil
 	}
-	base := filepath.Join(os.TempDir(), fmt.Sprintf("errand-%d", os.Getuid()))
+	base := filepath.Join(os.TempDir(), filepath.Base(ShortDir()))
 	if st, err := os.Stat("/tmp"); err == nil && st.IsDir() {
-		base = fmt.Sprintf("/tmp/errand-%d", os.Getuid())
+		base = ShortDir()
 	}
 	if err := os.Mkdir(base, 0o700); err != nil && !os.IsExist(err) {
 		return "", err
@@ -170,6 +170,14 @@ func DialDir(dir string, timeout time.Duration) (net.Conn, error) {
 }
 
 func LocalCache() string { return system.Cache() }
+
+// ShortDir: a short directory of this user's and instance's, for what a long path cannot be ( sockets ): /tmp/errand-<uid>[-<instance>]
+func ShortDir() string {
+	if inst := system.Instance(); inst != "main" {
+		return fmt.Sprintf("/tmp/errand-%d-%s", os.Getuid(), inst)
+	}
+	return fmt.Sprintf("/tmp/errand-%d", os.Getuid())
+}
 
 func ReadJSON(path string) map[string]any {
 	data, err := os.ReadFile(path)

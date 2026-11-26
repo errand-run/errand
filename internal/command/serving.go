@@ -2,7 +2,6 @@ package command
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -28,7 +27,7 @@ func (o serveOptions) asked(t *reach.Term, req map[string]any) (map[string]any, 
 	return l.Ask(map[string]any{"op": "services_do", "req": req})
 }
 
-// pageServicesMain: `errand serve look | fetch | install | probe`
+// pageServicesMain: `errand serve fetch | probe`
 func pageServicesMain(t *reach.Term, verb string, o serveOptions, words []string) int {
 	fail := func(err error) int {
 		t.Sayln("errand serve "+verb+":", strings.TrimPrefix(err.Error(), "this machine's agent: "))
@@ -39,60 +38,6 @@ func pageServicesMain(t *reach.Term, verb string, o serveOptions, words []string
 		on = "here"
 	}
 	switch verb {
-	case "look":
-		if len(words) != 1 {
-			t.Sayln("errand serve look [--on M] DIR ( a store )")
-			return 2
-		}
-		dir := words[0]
-		if !filepath.IsAbs(dir) {
-			dir = filepath.Join(t.Cwd, dir)
-		}
-		if st, err := os.Stat(dir); err != nil || !st.IsDir() {
-			return fail(fmt.Errorf("%s: no such directory", words[0]))
-		}
-		req := svc.LookRequest(dir, "", on)
-		paths, _ := req["paths"].(map[string][]string)
-		for _, p := range o.paths {
-			tool, at, _ := strings.Cut(p, "=")
-			paths[tool] = append(paths[tool], at)
-		}
-		got, err := o.asked(t, req)
-		if err != nil {
-			return fail(err)
-		}
-		store, _ := got["store"].(map[string]any)
-		var cards []string
-		for _, x := range caches.ListOf(got["cards"]) {
-			c, _ := x.(map[string]any)
-			cards = append(cards, kit.Text(c["name"]))
-		}
-		if len(cards) == 0 {
-			cards = []string{"no card"}
-		}
-		t.Printf("%s  %s  %s   the store: %s %s\n", on, kit.Text(got["platform"]), strings.Join(cards, ", "), kit.Text(store["seen"]), kit.Text(store["path"]))
-		services, _ := got["services"].(map[string]any)
-		for name, x := range services {
-			e, _ := x.(map[string]any)
-			key := kit.Text(e["key"])
-			if key == "" {
-				key = name
-			}
-			t.Printf("  %-24s %s  %s\n", key, kit.Text(e["state"]), kit.Text(e["why"]))
-			for _, f := range kit.Strs(e["found"]) {
-				t.Println("      · " + f)
-			}
-			for _, y := range caches.ListOf(e["lines"]) {
-				line, _ := y.(map[string]any)
-				note := ""
-				if line["unknown_source"] == true {
-					note = "  ( unknown source, named by the store )"
-				}
-				t.Println("      # " + kit.Text(line["comment"]) + note)
-				t.Println("      " + kit.Text(line["command"]))
-			}
-		}
-		return 0
 	case "fetch":
 		if len(words) != 1 {
 			t.Sayln("errand serve fetch [--on M] URL#sha256=HASH | git:URL@COMMIT | --for NAME#V git+URL@COMMIT | --for NAME#V pip:PKG==V")

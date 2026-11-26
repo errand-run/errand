@@ -45,3 +45,5 @@ is in the history of the repository that was errand before this one.
 | [0038](0038-what-is-not-errands-stops-a-push.md) | What is not errand's stops a push; a place may have its cache; a journal is watched | proposed |
 | [0039](0039-builds-are-in-errand-s-caches.md) | Builds go where errand keeps its caches; what is costly stays longer than what is not | accepted |
 | [0040](0040-a-server-is-what-is-asked-for.md) | A server is what is asked for, and is given a port on the asker's machine | accepted |
+| [0041](0041-a-page-describes-its-service-and-is-given-an-address.md) | A page describes its service, and is given an address or a refusal | proposed |
+| [0042](0042-a-request-that-waits-keeps-its-place-for-what-it-waits-for.md) | A request that waits keeps its place for what it waits for, not for the whole machine | accepted |

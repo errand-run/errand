@@ -30,7 +30,9 @@ them.
 Nothing is installed over there: errand sends its program, once per version. → [Nothing to install over there](./layers/ssh#nothing-to-install-over-there)
 
 A job does not depend on whoever started it: the laptop may sleep, an update may come. An agent of a newer errand takes the place over, and
-the older one stays until its jobs have ended ( a relay ).
+the older one stays until its jobs have ended ( a relay ). Newer is a later release, then a later version, then a later build ( each
+build is stamped when it is made ): an older errand still called somewhere ( a copy, another env, a path in a script ) uses the agent in
+place rather than take the place back, and nothing needs `errand agents restart`.
 
 What a machine keeps is under its name: its agents, its queue, its ports. On a Mac that is the one of the Sharing settings ( `scutil --get
 LocalHostName` ), not `hostname`, which changes with the network.

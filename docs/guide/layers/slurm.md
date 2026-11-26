@@ -155,6 +155,11 @@ the node, carves the allocation: an entry that declares nothing claims the whole
 commands run one after the other; an entry that declares `cpus = 4` or `gpus = 1` claims that
 much, and another runs beside it. A command that waits for room says so in `errand status`.
 
+**A job is shown where it runs.** `errand status`, `errand tui` and `errand web` list a job and its
+allocation under its node when that node is itself a machine work was sent to ( `node14` reached
+by `ssh -J cinaps` ), and the login node is not counted busy by it; otherwise under the login node
+that handed it, `running on node14`. Other machines that see the same home list nothing of it.
+
 **An allocation can be sized apart from its commands**, to land in a priority queue up to its
 threshold and run several computations in it:
 

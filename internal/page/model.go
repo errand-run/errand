@@ -533,7 +533,9 @@ func (u *Ui) runRows(q UiAsked) []UiRow {
 	var all []work
 	busy := map[string]bool{}
 	asking := false
-	for _, m := range u.snapshot() {
+	ms := u.snapshot()
+	skip := elsewhere(ms)
+	for i, m := range ms {
 		if m.M.Dormant() {
 			continue
 		}
@@ -542,7 +544,7 @@ func (u *Ui) runRows(q UiAsked) []UiRow {
 			continue
 		}
 		for _, r := range m.doc.Rows {
-			if r.State == "ended" || r.Aside {
+			if r.State == "ended" || r.Aside || skip[i]["run:"+r.ID] {
 				continue
 			}
 			busy[relOf(r.Leaf)] = true
@@ -761,10 +763,23 @@ func meters(res map[string]any) [][2]any {
 
 func anyList(v any) []any { out, _ := v.([]any); return out }
 
+// elsewhere: for each machine, what it says that another of those asked shows ( reach.Elsewhere )
+func elsewhere(ms []*UiMachine) []map[string]bool {
+	docs := make([]*reach.OverviewDoc, len(ms))
+	for i, m := range ms {
+		if !m.M.Dormant() && m.err == "" {
+			docs[i] = m.doc
+		}
+	}
+	return reach.Elsewhere(docs)
+}
+
 func (u *Ui) machineRows(q UiAsked) []UiRow {
 	var rows []UiRow
-	for _, m := range u.snapshot() {
-		m := m
+	ms := u.snapshot()
+	skip := elsewhere(ms)
+	for i, m := range ms {
+		m, skip := m, skip[i]
 		name := m.Name()
 		if m.Here() {
 			name += " (here)"
@@ -777,7 +792,7 @@ func (u *Ui) machineRows(q UiAsked) []UiRow {
 		if m.doc != nil {
 			for _, r := range m.doc.Rows {
 				switch {
-				case r.Aside || r.State == "ended":
+				case r.Aside || r.State == "ended" || skip["run:"+r.ID]:
 				case r.State == "waiting":
 					waiting++
 				default:
@@ -841,15 +856,11 @@ func (u *Ui) machineRows(q UiAsked) []UiRow {
 					Mark: mark, Depth: 1, Machine: ptr(m.Name()), What: &a, on: m})
 			}
 		}
-		for _, r := range m.doc.Refused {
-			r := r
-			if matches(q.Query, m.Name(), "refused", r.Who, r.What) {
-				rows = append(rows, UiRow{Key: rowKey("refused", m.Name(), r.Who+" "+r.What+" "+r.From), Label: "refused " + r.What + " to " + r.Who, Detail: reach.Span(m.now()-r.At) + " ago",
-					Kind: "refused", Mark: "refused", Depth: 1, Machine: ptr(m.Name()), What: &r, on: m})
-			}
-		}
 		for _, k := range m.doc.Kept {
 			k := k
+			if k.Kind == "allocation" && skip["alloc:"+k.ID] {
+				continue
+			}
 			if matches(q.Query, m.Name(), k.Text) {
 				kind, mark := "note", ""
 				if k.Kind == "unowned" {
@@ -874,7 +885,7 @@ func (u *Ui) find(key string) (*UiRow, error) {
 	switch {
 	case strings.HasPrefix(kind, "c") || kind == "mount" || kind == "sdir" || kind == "svcs" || kind == "svcver":
 		tabs = []string{"caches"}
-	case kind == "machine" || kind == "dormant" || kind == "vm" || kind == "service" || kind == "lease" || kind == "authorized" || kind == "refused" || kind == "unowned" || kind == "note":
+	case kind == "machine" || kind == "dormant" || kind == "vm" || kind == "service" || kind == "lease" || kind == "authorized" || kind == "unowned" || kind == "note":
 		tabs = []string{"machines", "runs"}
 	}
 	for _, tab := range tabs {

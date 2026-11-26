@@ -12,8 +12,10 @@
 //
 // **An update is a relay.** An agent of another version that starts asks this one to retire: it takes nothing new,
 // answers for its jobs -- through the new one, which finds a job's record under this directory and passes the request
-// on -- and goes when its last job ends. An agent asked for again takes the place back the same way. An errand
-// older than the agent it finds on a machine is told to update ( `release` ).
+// on -- and goes when its last job ends. Only an agent that comes before is retired ( its release, then its version, then
+// when it was built: reach.AgentVersion.Before ): a program called again after an update uses the agent in place rather
+// than take it back, and two that say no more apart leave the one in place. An errand of a release before the agent it
+// finds on a machine is told to update ( `release` ).
 //
 // **An agent killed outright loses its jobs** ( ADR 0008 ): the next one ends what is left of them, and says so in
 // their record.
@@ -161,7 +163,7 @@ func (a *Place) watch(f *reach.FarChan) {
 			doc.System, doc.User, doc.Cache = runtime.GOOS, os.Getenv("USER"), kit.LocalCache()
 			doc.Rows = onceEach(doc.Rows)
 			doc.Rested = rested(doc.Serving)
-			doc.Authorized, doc.Refused = authorizedRows()
+			doc.Authorized = authorizedRows()
 		}
 		handed := false // a run a batch system runs on another machine, its files on a disk they share: nothing tells
 		for _, r := range doc.Rows {
@@ -297,7 +299,7 @@ func PlaceMain(args []string) int {
 		return 0 // another one there: it answers
 	}
 	defer lock.Close() // ( and so held to the end: a file nothing names any more is closed, and its lock given up )
-	_ = kit.WriteRecord(filepath.Join(dir, "version"), reach.AgentVersion{Kind: kind, Release: reach.Release, Errand: system.Version, Pid: os.Getpid(), Started: kit.Seconds(time.Now())})
+	_ = kit.WriteRecord(filepath.Join(dir, "version"), reach.AgentVersion{Kind: kind, Release: reach.Release, Errand: system.Version, Built: system.BuiltAt(), Pid: os.Getpid(), Started: kit.Seconds(time.Now())})
 	_ = os.Remove(filepath.Join(dir, "retired"))
 	a.sweep()
 	path := filepath.Join(dir, "sock")
@@ -431,9 +433,10 @@ func (a *Place) sweep() {
 
 // retireOthers: this agent is the one asked now -- those of other versions take nothing new from here on
 func (a *Place) retireOthers() {
+	mine := reach.MineVersion()
 	for _, dir := range reach.Machines(a.Root, a.Dir) {
-		if reach.ReleaseOf(reach.VersionOf(dir).Release) > reach.ReleaseOf(reach.Release) {
-			continue // ( ahead of this one: a bridge of this version says so, and does not get this far )
+		if !reach.VersionOf(dir).Before(mine) {
+			continue // ( ahead of this one, or neither: the one in place stays )
 		}
 		if l, err := reach.LinkToAgent(dir); err == nil {
 			_, _ = l.Ask(map[string]any{"op": "retire"})
@@ -1190,6 +1193,9 @@ func (a *Place) launch(s runinfo.LaunchSpec) (runinfo.Launched, error) {
 	rec := runinfo.Record{V: 1, Name: path, File: file, Argv: s.Words, Date: when.Format(time.RFC3339), Started: s.When,
 		Env: s.Env, Place: place, Host: host, Project: root, Commit: commit, Dirty: dirty, Errand: system.Version,
 		Params: params, Tags: tags, Results: map[string]any{}, Label: s.Label}
+	if inst := system.Instance(); inst != "main" {
+		rec.Instance = inst
+	}
 	if err := kit.WriteRecord(filepath.Join(leaf, runinfo.LaunchName), rec); err != nil {
 		return runinfo.Launched{}, err
 	}

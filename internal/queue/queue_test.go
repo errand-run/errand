@@ -149,6 +149,83 @@ func TestFirstComeFirstServed(t *testing.T) {
 	}
 }
 
+// waiting: a request that waits in the background, once it is recorded; what it is granted comes on the channel
+func waiting(t *testing.T, q *Queue, r Request) chan *Granted {
+	t.Helper()
+	before := len(q.Waiting())
+	got := make(chan *Granted, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go func() {
+		g, _ := q.Acquire(ctx, r)
+		got <- g
+	}()
+	deadline := time.Now().Add(3 * time.Second)
+	for len(q.Waiting()) == before && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if len(q.Waiting()) == before {
+		t.Fatalf("%s is not waiting", r.Label)
+	}
+	return got
+}
+
+// A request that waits keeps its place only for what it waits for ( found on lmo, 2026-11-26: a test that needs no
+// card stayed 10 minutes behind a run that had waited 1 h 36 for the card ).
+func TestWaitingForACardHoldsBackOnlyCards(t *testing.T) {
+	q := machine(t, workstation)
+	both := take(t, q, Request{Label: "ollama", Needs: Needs{GPUs: 2}})
+	gpu := waiting(t, q, Request{Label: "fit", Needs: Needs{CPUs: 2, GPUs: 1}})
+	// what takes no card passes it, with what it leaves of the cpus
+	take(t, q, Request{Label: "tests", Needs: Needs{CPUs: 4}})
+	take(t, q, Request{Label: "slot"})
+	// ... and not with what it would take of them: those are kept for the run that waits
+	if why := waits(t, q, Request{Label: "make", Needs: Needs{CPUs: 4}}); !strings.Contains(why, "fit, which is waiting for cpus too") {
+		t.Errorf("told %q", why)
+	}
+	// another that needs a card waits behind it, even for a card it alone could share
+	if why := waits(t, q, Request{Label: "other", Needs: Needs{GPUs: 1}}); !strings.Contains(why, "fit, which is waiting for a card too") {
+		t.Errorf("told %q", why)
+	}
+	// what wants the machine to itself waits behind anything
+	if why := waits(t, q, Request{Label: "bench", Exclusive: true}); !strings.Contains(why, "fit, which is waiting for its turn") {
+		t.Errorf("the machine to itself, behind another: told %q", why)
+	}
+	both.Release()
+	select {
+	case g := <-gpu:
+		if g == nil || len(g.Devices) != 1 {
+			t.Fatalf("given %+v", g)
+		}
+		g.Release()
+	case <-time.After(3 * time.Second):
+		t.Fatal("the run waiting for a card never got it")
+	}
+}
+
+// What wants the machine to itself is passed by nothing, and passes nothing.
+func TestTheWholeMachineKeepsItsPlace(t *testing.T) {
+	q := machine(t, workstation)
+	held := take(t, q, Request{Label: "fit", Needs: Needs{GPUs: 1}})
+	bench := waiting(t, q, Request{Label: "bench", Exclusive: true})
+	if why := waits(t, q, Request{Label: "tests", Needs: Needs{CPUs: 1}}); !strings.Contains(why, "bench, which is waiting for the machine to itself") {
+		t.Errorf("told %q", why)
+	}
+	held.Release()
+	if g := <-bench; g != nil {
+		g.Release()
+	}
+	gpu := take(t, q, Request{Label: "fit", Needs: Needs{GPUs: 2}})
+	cpu := waiting(t, q, Request{Label: "tests", Needs: Needs{CPUs: 20}}) // more than there is: alone
+	if why := waits(t, q, Request{Label: "make", Needs: Needs{CPUs: 1}}); !strings.Contains(why, "tests, which is waiting for the machine to itself") {
+		t.Errorf("behind what needs more than there is: told %q", why)
+	}
+	gpu.Release()
+	if g := <-cpu; g != nil {
+		g.Release()
+	}
+}
+
 func TestCardsAreAssigned(t *testing.T) {
 	q := machine(t, workstation)
 	a := take(t, q, Request{Label: "a", Needs: Needs{GPUs: 1}})
@@ -337,7 +414,8 @@ func TestAClaimGrows(t *testing.T) {
 	if c, _ = run.Row(); c.CPUs != 4 || c.RequiredExtra.CPUs != 2 || c.Required.GPUs != 1 {
 		t.Errorf("after two more cores: %+v ( required %+v, extra %+v )", c.Needs, c.Required, c.RequiredExtra)
 	}
-	// it waits for what another holds, and gets it when that one goes; a new request does not pass it
+	// it waits for what another holds, and gets it when that one goes; a new request for a card does not pass it, one
+	// that takes nothing it waits for does
 	other := take(t, q, Request{Label: "other", Needs: Needs{GPUs: 1}})
 	grown := make(chan []int, 1)
 	go func() {
@@ -348,9 +426,10 @@ func TestAClaimGrows(t *testing.T) {
 	for len(q.Waiting()) == 0 && time.Now().Before(deadline) {
 		time.Sleep(20 * time.Millisecond)
 	}
-	if why := waits(t, q, Request{Label: "new"}); !strings.Contains(why, "train, which is waiting for more than it holds") {
+	if why := waits(t, q, Request{Label: "new", Needs: Needs{GPUs: 1}}); !strings.Contains(why, "train, which is waiting for more than it holds") {
 		t.Errorf("told %q", why)
 	}
+	take(t, q, Request{Label: "test", Needs: Needs{CPUs: 1}}).Release()
 	other.Release()
 	select {
 	case cards := <-grown:

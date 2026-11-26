@@ -1,7 +1,7 @@
 ---
 status: proposed
 date: 2026-11-19
-amended-by: 0040
+amended-by: 0040, 0042
 ---
 
 # `errand serve`: a service the agent keeps, under the queue, until nobody uses it
@@ -129,7 +129,8 @@ useless.
 - **Every waiting request is recorded** (`waiting/`), not only the exclusive and growing ones, and the
   oldest goes first: FIFO for all, `errand run` included. A small job that would fit beside a request
   waiting for the whole card waits behind it (no backfill for now). This changes the queue for
-  everyone; it is the rule one expects, and what "not overtaken" needs.
+  everyone; it is the rule one expects, and what "not overtaken" needs. *Amended by 0042*: a request
+  that waits keeps its place for what it waits for, not for the whole machine.
 - **While the service waits for its share**, the announced port is already held: a connection that
   arrives is accepted and **waits**, then is relayed when the server answers (the relay of the script,
   for every client). The keeper **gives up the wait** when nobody waits any more for `idle`: no

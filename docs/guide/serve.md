@@ -297,7 +297,8 @@ keep-alive ) keeps the server longer: the risk is taken on that side, never kill
 ## Waiting for its share
 
 A service that waits for a card waits in the queue like any run, in order: the queue is first come,
-first served, for everybody. Meanwhile its port is already open: a connection that arrives is
+first served, for everybody ( a run that takes no card may pass it, with what it leaves of the
+cpus and memory the service asked for ). Meanwhile its port is already open: a connection that arrives is
 accepted and **waits**, then is relayed once the server answers. The keeper gives up the wait when
 nobody waits for it any more ( no connection, no `errand serve` waiting ) for `idle`.
 
@@ -320,18 +321,18 @@ knows or refuses ( ADR 0040 ). What is authorized is written on that machine, in
 ```bash
 errand serve authorize --to key:boucles --on lmo --gpus 1 --idle 2m --var OLLAMA_HOST=127.0.0.1:{port} -- ollama serve
 # 3f2a91c0  ollama authorized to key:boucles on lmo   ollama serve
-errand serve authorized --on lmo              # what is authorized there, to whom, since when, last used; what was refused lately
+errand serve authorized --on lmo              # what is authorized there, to whom, since when, last used
 errand serve withdraw --on lmo 3f2a91c0       # to no one any more ( --to key:boucles: from that one only )
 ```
 
 - The authorization sets everything: the command, the needs, `--idle`, `--keep`. The asker gives only the hash. It is the hash of the
   definition as that machine reads it: the same as `errand serve --on lmo … -- ollama serve` gets, and so the same server.
-- `--to pages NAME#VERSION` is for pages ( below ); `--to key:NAME` for a key.
+- `--to key:NAME` for a key; `--to pages --spec -` for a page's description ( below ).
 - What you ask for yourself, by your own link, does not go through it.
 - Values of variables named `…TOKEN`, `KEY`, `SECRET`, `PASSWORD` are not shown, by `authorized`, `status` and the page.
 - A withdrawal cuts no connection already open.
-- The page shows them in the Machines tab, with what was refused lately: `withdraw` on one; `authorize to pages` on a page's request
-  that was refused, its whole command shown before.
+- The page shows them in the Machines tab: `withdraw` on one. A refusal is written nowhere; a refused key leaves a line in the
+  agent's journal.
 
 ## Through ssh: connect
 
@@ -344,7 +345,7 @@ the first ). The hash is an authorization's, or the one `errand serve --json` gi
 It is what a key in `authorized_keys` forces, for a tunnel that starts the server when it is used:
 
 ```text
-restrict,command="/.cache/errand/bin/errand serve connect 3f2a91c0" ssh-ed25519 AAAA… boucles
+restrict,command="~/.cache/errand/main/bin/errand serve connect 3f2a91c0" ssh-ed25519 AAAA… boucles
 ```
 
 The client behind such a key needs no errand. A key whose other side has one is given `errand there --only key:NAME` instead: a link
@@ -352,7 +353,7 @@ of errand's, on which that errand may say `hello` and reach, by their hash, the 
 ( no run, no file, no other machine, no errand sent to replace this one ). The filter is on the machine that serves:
 
 ```text
-restrict,command="/.cache/errand/bin/errand there --only key:boucles" ssh-ed25519 AAAA… boucles
+restrict,command="~/.cache/errand/main/bin/errand there --only key:boucles" ssh-ed25519 AAAA… boucles
 ```
 
 That path is [errand's stable name](./layers/ssh#under-a-name-that-does-not-change) on a machine it was sent to: nothing is
@@ -443,64 +444,9 @@ drive it themselves.
 ## A page that asks for a service
 
 A run's page served as it is ( `errand.Static`, see [Steps](./steps) ) can ask for services: a
-renderer that draws the current view, a field computed on demand. Each one may run on the machine
-the person chooses in the page: here, where the run wrote the directory, or any machine errand
-knows ( ADR 0026, 0027 ).
-
-### The package says how a service runs
-
-The code of a service never comes from the page. By default it comes from the producer's
-repository, at the commit that wrote the directory, into an env of that service's own on the
-machine ( `<cache>/svc-envs/<name>@<version>` ). errand never runs a service in an errand env nor
-in one of your envs as it is. You may put your own checkout in the service's env
-( `pip install --no-deps -e` ). The package ships, beside the code, a file of data,
-`errand-services.json`, and names its module by an entry point:
-
-```toml
-[project.entry-points."errand.services"]
-mytool = "mytool.services"
-```
-
-```json
-{ "format": 1, "package": { "name": "mytool", "pip": "mytool" },
-  "services": {
-    "field": { "protocol": 1, "text": "Computes a field of the scene on demand.",
-               "version_of": [ "field.py" ],
-               "run": [ "{python}", "-m", "mytool.services.field", "--port", "{port}" ], "idle": "5m" } } }
-```
-
-- `run` is a list of words. errand resolves its placeholders on the machine that runs it:
-  - `{python}`: the Python of the env that has the package;
-  - `{file:REL}`: a file of the package, where it is installed there;
-  - `{tool:NAME}`: a program found there, or fetched;
-  - `{port}`: the port, for the keeper.
-- `needs` ( `gpus`, `gpu_kind`, `platforms`, `ram` ) and `tools` say what the machine must have. For
-  a tool, the description gives:
-  - `look`: where it usually is;
-  - `version_from`: where to read its version in files ( `Info.plist`, a directory's name, dpkg,
-    snap );
-  - `min`: the oldest version that will do;
-  - `fetch`: a pinned download per platform ( URL, sha256, the program inside ).
-- **The version** of a service is 8 hex digits of a sha256 over its protocol and the files
-  `version_of` lists. The producer computes it when it writes a directory, and errand computes the
-  same on each machine by reading those files. errand never imports the package. Any edit to one
-  of those files gives a new version: a machine that authorized the old one shows the service as
-  `wrong version`, and a store written after the edit shows it as `installable` again. A new
-  `authorize` line authorizes the new version beside the old one.
-
-### The directory says what it asks for
-
-```json
-{ "format": 2, "services": {
-    "field": { "version": "3fa29c1e", "protocol": 1, "optional": true,
-               "package": { "name": "mytool", "version": "1.4" }, "described": { …a copy of the package's entry… } } } }
-```
-
-The directory holds names ( `field#3fa29c1e` ), where the code is ( `"source": { "git", "rev",
-"dir", "root", "dirty" }`: the producer's repository and commit, `dirty` when its files differ from
-that commit ), and a copy of the description, which serves only to propose an installation on a
-machine that lacks the code. It never runs anything, and the
-directory carries no code.
+renderer that draws the current view, a field computed on demand. It describes each one in full, as a
+program does for Ollama, and gets an address, or a refusal that says why and where to set it up
+( ADR 0026, 0041 ).
 
 ### Opening it
 
@@ -515,127 +461,145 @@ errand open path/to/scene.sviz
 which serves it beside `errand web` ( the host agent started if need be ) and opens it in the browser. Opened as a
 file, its page cannot read the files beside it: it shows that line, with its path.
 
-### The page reaches them through its own address
+### The page describes its service
 
-| request | answer |
-|---|---|
-| `GET .errand/services` | per service: `version`, `on` ( the machine chosen ), `state`, `why`, `store`, `found`, `lines` |
-| `GET .errand/machines` | the machines offered, here first, then the run's, then errand's other machines |
-| `GET .errand/machines/<M>[?refresh=1]` | what M's agent found, per service ( it reads files and runs nothing ) |
-| `POST .errand/services/<name>` `{"on": M}` | the machine chosen for that service, kept per view |
-| `POST .errand/copy` `{"on": M}` | the view's files copied into errand's cache on M ( data only ), kept up to date |
-| `POST .errand/machines/<M>/paths` `{"tool", "path"}` | a place for M's agent to look for a tool |
-| `.errand/svc/<name>/<path>` | relayed to `name#version` on the machine chosen ( any method, a body, a WebSocket ), started there first if needed |
-
-The states are:
-
-- `running` or `ready`: authorized to pages at this version;
-- `installable`: the lines below make it ready;
-- `unknown`: a version could not be read from files;
-- `unavailable`: greyed, with the reason;
-- `wrong version` or `unverified`: see below;
-- `unreachable`: the machine's agent did not answer.
-
-The relayed request carries **`X-Errand-Root`**: the directory as the service's machine sees it
-( the original, a shared file system, or errand's copy ), percent-encoded.
-
-**Only what both sides name runs.** A page reaches a service only if its `services.json` lists
-`name#version` *and* the machine authorizes exactly that to pages. Nothing a page sends says a command: the page gives the
-portable `name#version` of its store, and the authorization leads from it to a definition with that machine's paths.
-
-### The lines to type
-
-For a service that is not ready on a machine, errand composes the lines from what that machine has,
-and the page shows them. Nothing is run until a person types them:
-
-```text
-$ errand serve look --on lmo runs/foam.sviz
-lmo  linux-x86_64  RTX 2080 Ti   the store: original /home/hugo/runs/foam.sviz
-  blender#3fa29c1e         installable
-      · /usr/bin/blender · 4.1.1 ( dpkg ( package blender ) ) — this service needs 5.0 or later
-      · sdot 2026.11.3 in /home/hugo/miniforge3/envs/lmo-jax — provides blender#3fa29c1e, the version this store asks for
-      # blender 5.2.2 from download.blender.org into errand's cache on lmo ( checked against its sha256 8409…a168 ); nothing in it is run
-      errand serve fetch --on lmo https://download.blender.org/…/blender-5.2.2-linux-x64.tar.xz#sha256=8409…
-      # the service blender#3fa29c1e, as sdot 2026.11.3 in lmo-jax describes it, GPU 1, stopped after 10m unused
-      errand serve authorize --to pages --on lmo --gpus 1 --idle 10m blender#3fa29c1e -- /home/hugo/.cache/errand/tools/8409…/unpacked/… -b …
+```js
+const machines = await fetch( ".errand/machines" ).then( r => r.json() );    // [ { id, name, here } ]
+const r = await fetch( ".errand/srv", { method: "POST", body: JSON.stringify( {
+  on: machines[ 0 ].id,                                                         // none: the machine that serves the page
+  name: "blender", protocol: 1, text: "Pictures of the current view",
+  run: [ "{tool:blender}", "-b", "--factory-startup", "-P", "{file:blender.py}", "--", "--port", "{port}" ],
+  files: { git: "https://github.com/sdot-team/sdot", rev: "807e184", dir: "src/sdot/viz/services" },
+  tools: { blender: { min: "5.0", look: { "macos-*": [ "/Applications/Blender.app/Contents/MacOS/Blender" ], "*": [ "blender" ] },
+                      version_from: [ { plist: "../Info.plist", key: "CFBundleShortVersionString" }, { dirname: "blender-(\\d+\\.\\d+\\.\\d+)" } ],
+                      fetch: { "linux-x86_64": { url: "https://download.blender.org/…/blender-5.2.2-linux-x64.tar.xz", sha256: "8409…",
+                                                 run: "blender-5.2.2-linux-x64/blender", version: "5.2.2" } } } },
+  needs: { gpus: "0-1" }, idle: "10m" } ) } );                                // a card if the machine has one
+const got = await r.json();
+if ( r.ok ) fetch( got.url + "render?frame=3" );                            // .errand/srv/9c41e2d0/blender~5c1e09ab/
+else panel.innerHTML = got.html;                                             // why, what the machine has and lacks, a button to set it up
 ```
 
-- `errand serve fetch --on M URL#sha256=H`: a file, checked against its hash and kept by its
-  contents.
-- `errand serve fetch --on M --for NAME#V git+URL@COMMIT`: the package from its repository, into
-  that service's own env ( `pip:PKG==V` from an index works the same way ).
-- `errand serve fetch --on M git:URL@COMMIT`: only the files of the repository at that commit, for a
-  service that needs no Python env of its own ( Blender runs `blender.py` with its own Python ).
-- A source outside the list is refused unless you repeat it with `--source URL`. The list
-  holds PyPI, conda-forge and download.blender.org by default, and what you add: `errand serve source URL` ( `--off` ), in
-  `~/.config/errand/config.json`. The repository of a package already installed here also counts as known.
-- A directory written from changes that were never committed has no commit that holds its
-  version. The page says so, and the lines then use a checkout of the machine ( `CHECKOUT` ).
-- `errand serve authorize --to pages --on M NAME#VERSION -- WORDS` authorizes the service to pages as typed, in
-  `authorized-services.json` on M. It records the package that provides that version, and that
-  package's files are checked again before every start. If they changed, the state is
-  `wrong version` and the service does not start. With no package behind it, the authorization is
-  `unverified`. Without `-- WORDS`, the command is composed from the package there, shown, and
-  asked. Authorized again, `NAME#VERSION` leads to the new definition alone. Two versions are two servers, whatever runs them.
-- `errand serve probe --on M -- PROG --version` runs a program once to read a version that no file
-  says. Nothing else runs a program to look at it.
+The description says no path of any machine. Its placeholders, a closed set, are resolved on the machine that serves:
 
-`errand serve` lists every authorization, `authorized` when its server does not run; a page's request that was refused is in
-`errand serve authorized` and in the page, where one click ( after the whole command is shown ) authorizes it.
+- `{tool:NAME}`: a program found there ( `look`, the `PATH`, errand's cache, a path a person gave ), its version read
+  from files ( `version_from`: `Info.plist`, a directory's name, dpkg, snap ) and at least `min`; else fetched ( `fetch`,
+  per platform: URL, sha256, the program inside );
+- `{file:REL}`: a file of `files`, a repository at a commit ( only `dir` fetched, into errand's cache ) or a checkout of yours
+  ( `dev: true` ); nothing in it is installed;
+- `{python}`: an env of the service's own, with what `python.install` says, in one `pip install`: requirements of the index
+  ( `"numpy>=2"`, `"sdot==2026.11.3"` ), and repositories, at a commit ( `git+URL@REV#subdirectory=PACKAGE` ) or as a checkout of
+  yours ( `-e`, edited as it runs ). A repository given provides its package: pip does not take the index's ( your loom, in place
+  of PyPI's `loom-ffi` ):
 
-**Without errand** ( the directory under `python -m http.server`, or sent to someone ):
-`.errand/services` answers 404, and the page works on its files alone. By convention, a page then
-takes a service's address from its URL ( `?svc.field=http://127.0.0.1:9000` ), and a service
-started by hand is told its directory with `--root DIR`, since no relay adds `X-Errand-Root`. Such
-a service answers CORS for `127.0.0.1` and `localhost`, because the page is on another port.
+  ```js
+  python: { install: [ { git: "https://github.com/sdot-team/sdot", dev: true },
+                       { git: "https://github.com/hleclerc/loom", dev: true, package: "python" }, "numpy>=2" ] }
+  ```
+- `{port}`, `{port:NAME}`: the server's side of its port.
+
+The other keys: `vars`, `needs` ( `gpus`, `gpu_ram`, `ram`, `cpus` ), `busy`, `ready`, `idle`, `grace`. A repository
+in development may say `version_of`: its files whose edit makes another server ( `"src/sdot/viz/**/*.py"`, relative to it ).
+`gpus` may be a range, `"0-1"`: as many cards as the machine has, up to one, decided on each machine when it is authorized
+( a Mac's GPU is no card errand counts: Blender takes it by itself, and the service runs with none claimed ). A
+key errand does not know is refused: what a page means is never guessed.
+
+Its **hash**, eight hex digits of all it says ( `on` aside ), is its identity, computed by errand: another commit is another
+service. The address names the machine by an id ( `GET .errand/machines` gives them, with their names ), never by a name,
+which can be ambiguous; the page keeps its choice.
+
+The address stays valid as long as the authorization holds: there is no lease. A request that finds the server stopped
+starts it. The relayed request carries **`X-Errand-Root`**: the directory as the service's machine sees it ( the original,
+a shared file system, or errand's copy ), percent-encoded. Any method, a body, a WebSocket.
+
+### A refusal, and the window that authorizes
+
+`{ "error": "not authorized" | "no store" | "unavailable", "why", "html", "authorize", "form" }`, with 403:
+
+- `html` is a fragment the page inserts as it is: why, what the machine has and lacks, and a button *Set it up on lmo…*: a
+  form that POSTs the description, the machine and the view to `authorize`, **errand's own page**, in a new window. It holds no
+  script, with classes ( `errand-ok`, `errand-missing`, `errand-setup` ) a page may restyle. A page that draws its own sends
+  the fields of `form` there the same way. The page adds a *Retry* button. Nothing polls, and nothing is kept in between.
+
+The window is errand's, as a card payment's is the bank's: another origin than the view's, errand's cookie, never framed;
+another account of the machine that finds the address can do nothing there. It shows, for the machine chosen, one part per
+thing the service needs, in one list, in the order things happen: what is already there ( green ), what is yours to say, a
+checkout's path ( orange ), or cannot be there ( red ), what errand sets up once, when you authorize: a download, the code at a
+commit, its env, the view's files ( blue ); then the service itself. Each says its state, and what the page says of it ( folded ):
+
+- **the code**: the repository at its commit, in errand's cache; or, in development, a checkout of yours, whose path you give
+  there ( the command it stands for, `errand serve dev REPO PATH`, is shown as you type, to copy );
+- **its Python env**, for `{python}`: an env of the service's own, built by errand ( from the repository at its commit, or the
+  checkout installed in it as you edit it, `pip install -e` ), kept and removed with the service ( `serve list --versions`,
+  `prune` );
+- **each tool**: the one found, with its version and path, a field for another one, *run --version once* for a program whose
+  version no file says; or what will be downloaded;
+- **what the machine cannot give**, only when it cannot: `"1 card at least"`, more memory than it has;
+- **the view's files**: where the machine sees them, or that they will be copied;
+- what is downloaded has its source, size and sha256. A source outside `errand.sources` is red, and needs a box ticked;
+- the whole command, with that machine's paths;
+- **Authorize**: fetches, copies the view's files if that machine does not see them ( into errand's cache there, kept up to
+  date while the view is open ), composes, and writes the authorization `to: pages` in that machine's
+  `authorized-services.json`.
+
+Then *Retry* in the page gets the address. The window takes only a form from a view's own address, with errand's cookie;
+what it shows comes in that form, and Authorize sends it back: nothing of a refusal is kept. The same from the command line,
+the description on stdin:
+
+```bash
+errand serve authorize --to pages --on lmo --spec - < blender.json      # shown, then asked; --yes, --source URL, --path blender=/opt/b
+```
+
+- `errand serve fetch --on M URL#sha256=H`, `git:URL@COMMIT`, `--for NAME~HASH git+URL@COMMIT` fetch by hand, and
+  `errand serve probe --on M -- PROG --version` reads a version once: what the window does, typed.
+- The list of trusted sources holds PyPI, conda-forge and download.blender.org by default, and what you add:
+  `errand serve source URL` ( `--off` ), in `~/.config/errand/config.json`. The repository of a package already installed
+  here counts too.
+- `errand serve authorized` lists what pages may ask for, and the page's Machines tab shows them; `withdraw` takes one back.
+
+**Without errand** ( the directory under `python -m http.server`, or sent to someone ): `.errand/srv` answers 404, and
+the page works on its files alone. By convention, a page then takes a service's address from its URL
+( `?svc.field=http://127.0.0.1:9000` ), and a service started by hand is told its directory with `--root DIR`, since no
+relay adds `X-Errand-Root`. Such a service answers CORS for `127.0.0.1` and `localhost`, because the page is on another port.
 
 - **The queue is per user and per machine.** A server started under another account ( a systemd
-  service ) is not seen, and its share of the card is not counted. Nor is a run started with
-  `--no-queue`: it takes the card without asking, and a service that loads a model next to it may
-  find the card full.
+  service ) is not seen, and its share of the card is not counted.
 - **The server's side of a port is open to every account of the machine**, and so is the announced
   side outside Linux ( see [Only your connections](#only-your-connections) ).
-- **From another machine**: `--on` ( above ), or `errand serve connect` behind an ssh key.
 
 ### Developing a service
 
-While working on a service, a new version at each edit is in the way. On this file system, say that a
+While working on a service, a new commit at each edit is in the way. On this file system, say that a
 repository is represented by the checkout you work on:
 
 ```bash
 errand serve dev github.com/sdot-team/sdot ~/Projects/sdot-ffi --env prj-jax      # --off: no more
 ```
 
-A page whose store asks for a service of that repository then runs it from the checkout, whatever its
-version: as the checkout describes it ( its own `errand-services.json` ), a Python service in the env
-named, under the name `NAME#dev`. An edit of the files its version is computed over is seen at the next
-connection: the service is authorized again and restarted. A page chooses, per service, between the
-checkout ( by default, when there is a usable one ) and the store's version.
+A page that describes a repository with `dev: true` instead of a `rev` ( in `files`, or in `python.install` ) is then
+authorized to run from that checkout ( the window of errand's page asks where it is, one part per repository ); `{python}` is
+an env errand builds for the service, the checkouts installed in it as you edit them. The page chooses, per service and per repository, the
+commit or your checkout ( each service has its env ): it is part of what that service is. The hash does not depend on the code: an edit of the files `version_of` names gives another
+server behind the same address, at the next connection.
 
 A copy of the project on another machine ( the copy errand keeps for the runs there ) carries it: the
 checkout inside the copy is a dev source on that machine too, with `"envs": { "lmo": "lmo-jax" }` in `config.json` for the
 env there. It is only as fresh as the last push. The storage tab lists the dev sources under their disk,
-and `d` turns one off ( or on again ): a line in that disk's configuration, never in a store.
+and `d` turns one off ( or on again ).
 
-### Versions pile up, and go
+### What piles up, and goes
 
-Each change of a service's files is a new version ( `blender#63ecc287` ), with its declaration, its env and
-the code fetched for it. errand keeps track:
+Each description authorized to pages ( `blender~63ecc287` ) brings its env and the code fetched for it. errand keeps track:
 
 ```bash
-errand serve list --versions          # each version: its size, when it was used, the stores that ask for it
+errand serve list --versions          # each: its size, when it was used
 errand serve prune --dry-run          # what the purge would remove
-errand serve pin blender#63ecc287     # kept whatever happens ( unpin to undo )
+errand serve pin blender~63ecc287     # kept whatever happens ( unpin to undo )
 ```
 
-A version no store present here asks for, not run for 14 days and not pinned, goes at the host agent's
-daily purge, with its env; the code fetched for it goes with the last version that needed it.
-`errand serve prune --unused DAYS` does it now. The storage tab of `errand web` lists them under the
-disk of errand's directory, `d` removes one.
-
-For a service with no Python of its own ( Blender's ), only what it needs is fetched: its directory and
-the files its version is computed over ( `version_of` ), a few dozen KB at the store's commit instead of
-the whole repository.
+One not run nor authorized for 14 days, and not pinned, goes at the host agent's daily purge, with its env; the code
+fetched for it goes with the last that needed it. `errand serve prune --unused DAYS` does it now. The storage tab of
+`errand web` lists them under the disk of errand's directory, `d` removes one.
 
 ## Next
 

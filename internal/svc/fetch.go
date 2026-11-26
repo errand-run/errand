@@ -1,8 +1,8 @@
-// What `errand serve install` and `errand serve fetch` do on this machine ( ADR 0027 §4 ): a file checked and unpacked, a
-// package in the env of the service it is for, the files of a repository at a commit; and the declarations written here.
+// What is fetched for a page's service on this machine ( ADR 0027 §4, 0041 ): a file checked and unpacked, a package in the
+// env of the service it is for, the files of a repository at a commit. Nothing in them is run here.
 //
-// A fetch from a source outside `errand.sources` is refused unless the person repeats it ( `--source` ): a store may NAME
-// a source, it never vouches for one. Nothing here is reached by a page: the page shows the lines, a person types them.
+// A fetch from a source outside `errand.sources` is refused unless the person accepts it ( `--source`, or the box ticked in
+// errand's page ): a page may NAME a source, it never vouches for one.
 
 package svc
 
@@ -44,100 +44,6 @@ func platformName() string {
 	return system + "-" + arch
 }
 
-// ── what pages may ask for ───────────────────────────────────────────────────
-
-// PageSpec: what a page's service runs here -- `NAME#VERSION`, its command, and what is said beside it: idle, gpus, gpu_ram,
-// ram, cpus, exclusive, grace, keep, others, vars, busy, cwd
-func PageSpec(key string, command []string, said map[string]any) (ServiceSpec, error) {
-	s := ServiceSpec{Name: key, Label: key, Command: command, Env: map[string]string{}, Needs: map[string]any{}}
-	_, s.Version = splitKey(key) // ( two versions are two servers, whatever runs them )
-	for k, v := range said {
-		var err error
-		switch k {
-		case "gpus", "gpu_ram", "ram", "cpus":
-			s.Needs[k] = fmt.Sprint(v)
-		case "idle", "grace", "keep":
-			d := 0.0
-			if f, ok := v.(float64); ok {
-				d = f
-			} else {
-				d, err = Duration(fmt.Sprint(v))
-			}
-			*map[string]*float64{"idle": &s.Idle, "grace": &s.Grace, "keep": &s.Keep}[k] = d
-		case "exclusive":
-			s.Exclusive = v == true
-		case "others":
-			s.Others = v == true
-		case "vars", "env":
-			for name, value := range ObjectOf(v) {
-				s.Env[name] = fmt.Sprint(value)
-			}
-		case "busy":
-			if v != "" {
-				s.Busy = v
-			}
-		case "cwd":
-			s.Cwd = kit.Text(v)
-		default:
-			err = fmt.Errorf("%s: not something a page's service is given here", k)
-		}
-		if err != nil {
-			return s, err
-		}
-	}
-	s.Complete()
-	return s, s.Check()
-}
-
-// WrongVersion: why `key` must not start -- the version its provider gives now is another; "" when it may
-func WrongVersion(key string, from any) string {
-	name, v := splitKey(key)
-	file := kit.Text(from)
-	if v == "" || file == "" {
-		return ""
-	}
-	data := caches.ReadObject(file)
-	p := provider{Dir: filepath.Dir(file), Data: data}
-	entry := p.Entry(name)
-	if entry == nil {
-		return "wrong version: its description " + file + " cannot be read"
-	}
-	now, err := serviceVersion(name, entry, p.Dir)
-	if err != nil {
-		return fmt.Sprintf("wrong version: what %s describes cannot be read ( %v )", file, err)
-	}
-	if now != v {
-		return fmt.Sprintf("wrong version: %s now gives %s#%s, declared as #%s", file, name, now, v)
-	}
-	return ""
-}
-
-// ComposedHere: the command of `key` as the package here that provides it describes it, with this machine's tools
-func ComposedHere(key string) ([]string, map[string]any, string, error) {
-	name, _ := splitKey(key)
-	provs := providing(key)
-	if len(provs) == 0 {
-		return nil, nil, "", fmt.Errorf("no package here provides %s: give the command after --, or fetch the package first", key)
-	}
-	p := provs[0]
-	entry := p.Entry(name)
-	tools, missing := map[string]string{}, []string{}
-	found := toolsHere(ObjectOf(entry["tools"]), nil)
-	for _, t := range sortedKeys(found) {
-		if tools[t] = found[t].path; found[t].path == "" {
-			missing = append(missing, t)
-		}
-	}
-	if len(missing) > 0 {
-		return nil, nil, "", fmt.Errorf("%s: no %s here that will do ( errand serve look shows what to fetch )", key, strings.Join(missing, ", "))
-	}
-	words, err := p.compose(name, tools, true)
-	if err != nil {
-		return nil, nil, "", err
-	}
-	return words, DescribedNeeds(entry), fmt.Sprintf("service %s, as %s %s in %s describes it:\n  %s", key, p.Package, p.Version, p.Env, quoteAll(words)), nil
-}
-
 // Typed: words, as they are typed in a shell
 func Typed(words []string) string { return quoteAll(words) }
 
@@ -152,36 +58,6 @@ func quoteAll(words []string) string {
 func ObjectOf(v any) map[string]any {
 	m, _ := v.(map[string]any)
 	return m
-}
-
-// AuthorizePage: `key` authorized to pages -- with the words a person typed, else composed from the package here that
-// provides it -> the authorization, its hash in it
-func AuthorizePage(key string, words []string, needs map[string]any) (Authorization, error) {
-	how := Authorization{Page: key, Unverified: true}
-	if _, v := splitKey(key); v == "" {
-		return how, fmt.Errorf("%s: name#version ( the version is the store's, e.g. blender#3fa29c1e )", key)
-	}
-	if len(words) == 0 {
-		var more map[string]any
-		var err error
-		if words, more, _, err = ComposedHere(key); err != nil {
-			return how, err
-		}
-		for k, v := range needs {
-			more[k] = v
-		}
-		needs = more
-	}
-	if provs := providing(key); len(provs) > 0 {
-		how.Provider, how.Unverified = provs[0].file(), false
-	}
-	s, err := PageSpec(key, words, needs)
-	if err != nil {
-		return how, err
-	}
-	how.Hash, err = Authorize(s, "pages", how)
-	how.Definition, how.Label, how.To = Definition(s), key, []string{"pages"}
-	return how, err
 }
 
 // ── sources ──────────────────────────────────────────────────────────────────
@@ -349,9 +225,9 @@ var (
 	notInEnv = regexp.MustCompile(`[^A-Za-z0-9._@-]+`)
 )
 
-// serviceEnv: the env of a service ( `sdot.ao#dc9530a9` -> `svc-envs/sdot.ao@dc9530a9` ): one per service
+// serviceEnv: the env of a service ( `sdot.ao~dc9530a9` -> `svc-envs/sdot.ao@dc9530a9` ): one per service
 func serviceEnv(key string) string {
-	name := strings.NewReplacer("#", "@", "==", "-").Replace(key)
+	name := strings.NewReplacer("~", "@", "#", "@", "==", "-").Replace(key)
 	return filepath.Join(serviceEnvsDir(), strings.Trim(notInEnv.ReplaceAllString(name, "-"), "-"))
 }
 
@@ -378,7 +254,14 @@ func quietly(words ...string) error {
 
 // fetchPackage: a package ( `sdot==2026.11.3`, or `git+URL@REV` ) into the env of a service, or into one that is there
 func fetchPackage(spec, index, into, forKey string, allowed []string) (string, error) {
-	if g := gitSpec.FindStringSubmatch(spec); g != nil {
+	editable, words := strings.HasPrefix(spec, "-e "), []string{spec}
+	if editable { // a checkout of this machine's: nothing fetched, its files used as they are
+		at := strings.TrimSpace(spec[3:])
+		if !kit.IsDir(at) {
+			return "", fmt.Errorf("%s: no such directory", at)
+		}
+		words = []string{"-e", at}
+	} else if g := gitSpec.FindStringSubmatch(spec); g != nil {
 		if err := sourceAllowed(httpsURL(g[1]), allowed); err != nil {
 			return "", err
 		}
@@ -412,35 +295,79 @@ func fetchPackage(spec, index, into, forKey string, allowed []string) (string, e
 		if python == "" {
 			return "", fmt.Errorf("%s: no Python in it", prefix)
 		}
-		return prefix, quietly(python, "-m", "pip", "install", "--index-url", index, spec)
+		return prefix, quietly(append([]string{python, "-m", "pip", "install", "--index-url", index}, words...)...)
 	}
 	if forKey == "" {
 		return "", fmt.Errorf("%s: for which service? ( --for NAME#VERSION: one env per service )", spec)
 	}
 	prefix, uv := serviceEnv(forKey), uvHere()
-	if pythonIn(prefix) == "" {
-		if err := os.MkdirAll(filepath.Dir(prefix), 0o755); err != nil {
-			return "", err
-		}
-		make := []string{uv, "venv", "--seed", prefix}
-		if uv == "" {
-			python, err := exec.LookPath("python3")
-			if err != nil {
-				if python, err = exec.LookPath("python"); err != nil {
-					return "", errors.New("neither uv nor a Python here, to make the env of a service with")
-				}
-			}
-			make = []string{python, "-m", "venv", prefix}
-		}
-		if err := quietly(make...); err != nil {
-			return "", err
-		}
+	if err := makeEnv(prefix, uv); err != nil {
+		return "", err
 	}
 	python := pythonIn(prefix)
 	if uv != "" {
-		return prefix, quietly(uv, "pip", "install", "--python", python, "--index-url", index, spec)
+		return prefix, quietly(append([]string{uv, "pip", "install", "--python", python, "--index-url", index}, words...)...)
 	}
-	return prefix, quietly(python, "-m", "pip", "install", "--index-url", index, spec)
+	return prefix, quietly(append([]string{python, "-m", "pip", "install", "--index-url", index}, words...)...)
+}
+
+// makeEnv: a venv there, if there is none
+func makeEnv(prefix, uv string) error {
+	if pythonIn(prefix) != "" {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(prefix), 0o755); err != nil {
+		return err
+	}
+	make := []string{uv, "venv", "--seed", prefix}
+	if uv == "" {
+		python, err := exec.LookPath("python3")
+		if err != nil {
+			if python, err = exec.LookPath("python"); err != nil {
+				return errors.New("neither uv nor a Python here, to make the env of a service with")
+			}
+		}
+		make = []string{python, "-m", "venv", prefix}
+	}
+	return quietly(make...)
+}
+
+// fetchEnv: the env of a service, made if need be, with all it installs in one pip install -- a repository given ( -e CHECKOUT,
+// git+URL@REV ) provides its package, which pip then does not take from the index. Nothing of it is run here.
+func fetchEnv(key string, words [][]string, index string, allowed []string) (string, error) {
+	var args []string
+	for _, w := range words {
+		switch {
+		case len(w) == 2 && w[0] == "-e":
+			if !kit.IsDir(w[1]) {
+				return "", fmt.Errorf("%s: no such directory", w[1])
+			}
+		case len(w) == 1 && strings.HasPrefix(w[0], "git+"):
+			g := gitSpec.FindStringSubmatch(w[0])
+			if g == nil {
+				return "", fmt.Errorf("%q: git+URL@COMMIT", w[0])
+			}
+			if err := sourceAllowed(httpsURL(g[1]), allowed); err != nil {
+				return "", err
+			}
+		case len(w) == 1 && !strings.HasPrefix(w[0], "-"):
+		default:
+			return "", fmt.Errorf("%q: not something an env installs", strings.Join(w, " "))
+		}
+		args = append(args, w...)
+	}
+	if err := sourceAllowed(index, allowed); err != nil {
+		return "", err
+	}
+	prefix, uv := serviceEnv(key), uvHere()
+	if err := makeEnv(prefix, uv); err != nil {
+		return "", err
+	}
+	python := pythonIn(prefix)
+	if uv != "" {
+		return prefix, quietly(append([]string{uv, "pip", "install", "--python", python, "--index-url", index}, args...)...)
+	}
+	return prefix, quietly(append([]string{python, "-m", "pip", "install", "--index-url", index}, args...)...)
 }
 
 // fetchRepository: the files of a repository at a commit, kept by it; nothing in them is run. `only`: paths of it, the

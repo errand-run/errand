@@ -15,6 +15,7 @@ import hashlib
 import os
 import shutil
 import subprocess
+import time
 import sys
 import tarfile
 import tempfile
@@ -40,6 +41,9 @@ def program( system: str ) -> str:
     return "errand-" + system.replace( "/", "-" ) + ".exe" * system.startswith( "windows" )
 
 
+BUILT = time.time_ns()     # ( when: of two builds of one version, the later one replaces the other's agent )
+
+
 def compiled( into: Path ) -> dict:
     """The program of every system -> where each is"""
     if not shutil.which( "go" ):
@@ -48,7 +52,8 @@ def compiled( into: Path ) -> dict:
     for system in SYSTEMS:
         goos, arch = system.split( "/" )
         out[ system ] = into / program( system )
-        subprocess.run( [ "go", "build", "-trimpath", "-ldflags", f"-s -w -X github.com/errand-run/errand/internal/system.Version={VERSION}",
+        subprocess.run( [ "go", "build", "-trimpath", "-ldflags",
+                          f"-s -w -X github.com/errand-run/errand/internal/system.Version={VERSION} -X github.com/errand-run/errand/internal/system.Built={BUILT}",
                           "-o", str( out[ system ] ), "./cmd/errand" ], cwd = ROOT, check = True,
                         env = { **os.environ, "GOOS": goos, "GOARCH": arch, "CGO_ENABLED": "0" } )
     return out

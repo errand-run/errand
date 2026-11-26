@@ -106,7 +106,7 @@ func staticServe(rw http.ResponseWriter, r *http.Request, services func(rw http.
 	}
 	rw.Header().Set("Cache-Control", "no-store")
 	rw.Header().Set("X-Content-Type-Options", "nosniff")
-	rw.Header().Set("Referrer-Policy", "no-referrer")
+	rw.Header().Set("Referrer-Policy", "strict-origin") // ( its origin alone, never its path and the token in it -- and a form's POST then says its Origin, which no-referrer makes "null" )
 	parts := strings.Split(strings.TrimPrefix(r.URL.EscapedPath(), "/"), "/")
 	if subtle.ConstantTimeCompare([]byte(parts[0]), []byte(staticToken())) != 1 {
 		http.Error(rw, "not found", http.StatusNotFound)

@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/errand-run/errand/internal/kit"
 	"github.com/errand-run/errand/internal/queue"
 	"github.com/errand-run/errand/internal/reach"
 )
@@ -13,7 +14,7 @@ import (
 func TestAServiceThatRestsIsSaid(t *testing.T) {
 	t.Setenv("ERRAND_CACHE_DIR", t.TempDir())
 	write := func(name, file, text string) {
-		p := filepath.Join(os.Getenv("ERRAND_CACHE_DIR"), "serving", name, file)
+		p := filepath.Join(kit.LocalCache(), "serving", name, file)
 		_ = os.MkdirAll(filepath.Dir(p), 0o755)
 		if err := os.WriteFile(p, []byte(text), 0o644); err != nil {
 			t.Fatal(err)

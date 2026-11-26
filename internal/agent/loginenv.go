@@ -72,7 +72,7 @@ func readLogin() []string {
 	if u, err := user.Current(); err == nil {
 		env = append(env, "USER="+u.Username, "LOGNAME="+u.Username)
 	}
-	for _, k := range []string{"LANG", "LC_ALL", "TMPDIR", "XDG_RUNTIME_DIR", "ERRAND_CACHE_DIR", "ERRAND_SHARED"} { // the session's, and where errand is
+	for _, k := range []string{"LANG", "LC_ALL", "TMPDIR", "XDG_RUNTIME_DIR", "ERRAND_CACHE_DIR", "ERRAND_INSTANCE", "ERRAND_SHARED"} { // the session's, and where errand is
 		if v := os.Getenv(k); v != "" {
 			env = append(env, k+"="+v)
 		}

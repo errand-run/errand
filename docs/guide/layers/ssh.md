@@ -69,15 +69,17 @@ Under a scheduler, the command starts on a compute node that may have no network
 made once on the machine ssh reaches, before submitting, and the job finds the result in
 `~/.cache`, in the home directory the nodes share.
 
-Everything errand made for itself is in `~/.cache/errand`: removing that directory undoes it.
+Everything errand made for itself is in `~/.cache/errand` ( `main/`, and an instance's beside it ): removing that directory
+undoes it.
 
 ### Under a name that does not change
 
 What is sent is named by its version ( `bin/<hash>/errand` ). For what must name errand on that machine and is not a client
-of it -- the command a key forces, a cron line --, `~/.cache/errand/bin/errand` is a link to the one in use. The machine's
+of it -- the command a key forces, a cron line --, `~/.cache/errand/main/bin/errand` is a link to the one in use ( `main`,
+the errand in use; another instance has its own, `~/.cache/errand/try/bin/errand` ). The machine's
 agent points it at itself when it starts: a newer errand here moves it at its next command there, an older one does not move it
 back, and the copy it leads to is never tidied away. With a `cache` of the place's own, the link is in it, and the line says
-so: `ERRAND_CACHE_DIR=/workdir/me/errand /workdir/me/errand/bin/errand …`. On a home shared by machines of several kinds
+so: `ERRAND_CACHE_DIR=/workdir/me/errand /workdir/me/errand/main/bin/errand …`. On a home shared by machines of several kinds
 ( amd64, arm64 ) it is the first one's. Not on Windows.
 
 ### Where errand keeps its own
