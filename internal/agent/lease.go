@@ -210,6 +210,9 @@ func (a *Place) takeLease(spec svc.ServiceSpec, environ []string) (leaseRecord, 
 	if err != nil {
 		return none, lookedAt{}, err
 	}
+	if machine != nil && reach.HostOf(machine).IsHere() { // ( a name that leads back here: this machine, as if it was not said )
+		spec, machine = there, nil
+	}
 	var host *reach.HostSpec
 	var said lookedAt
 	name, text := "", spec.Text()

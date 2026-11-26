@@ -95,9 +95,15 @@ errand machines watch jz on           # always contacted ( auto: while work is s
 errand machines gauges jz off         # its CPU / memory / GPU gauges not measured; what runs there still followed
 ```
 
-A machine reached under several names ( `cinaps` and `hugo.leclerc@cinaps` ) is one: the same ssh
-name but for the user, the same label, or the same hostname answered. It shows its oldest name, or
-the label it was given.
+A machine reached under several names ( `cinaps` and `hugo.leclerc@cinaps` ) is one when it says
+so: its agent answers an id made of the one its system was given at installation ( Linux's
+`/etc/machine-id`, a Mac's IOPlatformUUID, Windows' MachineGuid ) and of its hostname. Two `node14`
+of two clusters are two machines; an id errand would keep in its own directory would not tell
+apart the nodes of a cluster, which share a home. Until a machine has answered it ( an older
+errand, a container without one ), the same ssh name but for the user, the same label, or the same
+hostname answered make one. It shows its oldest name, or the label it was given; two machines of
+one name are told apart by how they are reached. A label is refused when another machine is
+already known by that word, and this machine keeps its own name.
 
 A machine no work was sent to for a day is **dormant**: neither `errand status` nor `errand tui`
 contacts it, so that no agent of errand's starts for nothing on a machine others share ( a cluster's

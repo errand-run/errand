@@ -226,7 +226,10 @@ func machineFor(t *reach.Term, host, env, root string) (*reach.HostSpec, error) 
 			return &h, nil
 		}
 	}
-	return &reach.HostSpec{Host: host}, nil
+	if h := (reach.HostSpec{Host: host}); !h.IsHere() { // ( a name that leads back here is here )
+		return &h, nil
+	}
+	return nil, nil
 }
 
 // onWhat: where a server is to run, as data -- a machine by its name, or an environment of the project, in full

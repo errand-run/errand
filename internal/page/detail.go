@@ -869,8 +869,8 @@ func (u *Ui) can(row *UiRow, m *UiMachine) map[string]any {
 	case "machine", "broken", "dormant":
 		if m != nil {
 			out["check"] = true
-			out["rename"] = true
 			if !m.Here() {
+				out["rename"] = true
 				out["forget"] = true
 				switch {
 				case m.M.Dormant():

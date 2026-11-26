@@ -51,7 +51,7 @@ func (t *Term) MachineUp(h *HostSpec) (*Link, error) {
 		return nil, err
 	}
 	if h.VM.Via != nil {
-		UsedMachine(*h.VM.Via, "")
+		UsedMachine(*h.VM.Via, "", "")
 	}
 	want := h.VM
 	l := &Link{base: base, Dead: base.Dead, Where: h.Host, wrap: func(req any) any {

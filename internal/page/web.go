@@ -1053,14 +1053,18 @@ func (w *webServer) act(u *Ui, body map[string]any) (map[string]any, error) {
 	case "watch":
 		return said(u.ToggleWatch(m))
 	case "rename":
+		if m.Here() { // ( said before a name is asked: what is typed would be lost )
+			return nil, errors.New("this machine is shown by its own name")
+		}
 		label, given := body["label"].(string)
 		if !given {
 			return map[string]any{"prompt": map[string]any{"title": "a name for " + m.Name(), "text": m.Name()}}, nil
 		}
-		if m.Here() {
-			return nil, errors.New("this machine is shown by its own name")
+		label = strings.TrimSpace(label)
+		if err := m.M.CanBeNamed(label); err != nil {
+			return nil, err
 		}
-		u.EditNotes(m, func(n *reach.MachineNote) { n.Label = strings.TrimSpace(label) })
+		u.EditNotes(m, func(n *reach.MachineNote) { n.Label = label })
 		return said("named " + label)
 	case "edit", "reveal":
 		p := kit.Text(body["path"])

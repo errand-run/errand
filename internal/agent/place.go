@@ -622,7 +622,7 @@ func (a *Place) serve(req map[string]any, f *reach.FarChan) {
 		f.Reply(map[string]any{"ok": true, "overview": overview(a)})
 	case "hello":
 		home, _ := os.UserHomeDir()
-		f.Reply(map[string]any{"ok": true, "version": system.Version, "release": reach.Release, "host": queue.Host(), "home": home, "cache": kit.LocalCache(), "running": a.running()})
+		f.Reply(map[string]any{"ok": true, "version": system.Version, "release": reach.Release, "host": queue.Host(), "machine": system.MachineID(), "home": home, "cache": kit.LocalCache(), "running": a.running()})
 	case "want":
 		a.serveWant(req, f)
 	case "claim":

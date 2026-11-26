@@ -1003,7 +1003,12 @@ func (s *tui) rename() {
 		return
 	}
 	s.box = &tuiBox{title: "a name for " + m.Name(), verb: "keep it", prompt: true, text: m.Name(), do: func(t string) {
-		s.u.EditNotes(m, func(n *reach.MachineNote) { n.Label = strings.TrimSpace(t) })
+		t = strings.TrimSpace(t)
+		if err := m.M.CanBeNamed(t); err != nil {
+			s.say(err.Error())
+			return
+		}
+		s.u.EditNotes(m, func(n *reach.MachineNote) { n.Label = t })
 		s.say("named " + t)
 	}}
 }

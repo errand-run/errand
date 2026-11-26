@@ -213,6 +213,10 @@ func MachinesMain(t *Term, args []string) int {
 		v := args[2]
 		switch {
 		case args[0] == "rename":
+			if err := m.CanBeNamed(v); err != nil {
+				t.Sayf("errand machines rename: %s", err)
+				return 1
+			}
 			edit(m, func(n *MachineNote) { n.Label = v })
 		case args[0] == "watch" && (v == "on" || v == "off" || v == "auto"):
 			if v == "auto" {

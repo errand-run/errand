@@ -115,7 +115,7 @@ func pushTo(t *reach.Term, doc *project.Document, envName string, stack []projec
 		return nil, h, "", err
 	}
 	if got, err := l.Ask(map[string]any{"op": "hello"}); err == nil {
-		reach.UsedMachine(h, kit.Text(got["host"]))
+		reach.UsedMachine(h, kit.Text(got["host"]), kit.Text(got["machine"]))
 	}
 	since := time.Now()
 	done := t.Working("work", "↑ push → "+h.Host) // under way: on the place line's right, and gone when it is over

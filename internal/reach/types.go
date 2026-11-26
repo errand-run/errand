@@ -260,6 +260,7 @@ type MachineNote struct {
 	Windows  bool     `json:"windows,omitempty"`
 	Cache    string   `json:"cache,omitempty"`    // where errand keeps its files there, when that was declared
 	Hostname string   `json:"hostname,omitempty"` // as it names itself
+	ID       string   `json:"id,omitempty"`       // what tells it from any other ( system.MachineID ); "": an errand that did not say it
 	Label    string   `json:"label,omitempty"`
 	First    float64  `json:"first"`
 	Used     float64  `json:"used"`            // when work was sent there last
@@ -352,6 +353,20 @@ func (m Machine) Named(word string) bool {
 	return false
 }
 
+// CanBeNamed: whether `label` may name it -- not when another machine is known by that word: the ledger would take
+// the two for one ( one label, one machine ), and a command naming it would not know which. "": its oldest name again.
+func (m Machine) CanBeNamed(label string) error {
+	if label == "" {
+		return nil
+	}
+	for _, o := range Ledger(HereName()) {
+		if o.Name != m.Name && o.Named(label) {
+			return fmt.Errorf("%s is what %s is called: another name", label, o.Name)
+		}
+	}
+	return nil
+}
+
 func afterUser(host string) string {
 	if at := strings.LastIndex(host, "@"); at >= 0 {
 		return host[at+1:]
@@ -378,29 +393,33 @@ func ledgerNotes() []MachineNote {
 	return out
 }
 
-// Ledger: the machines known, this one first, then the most recently used
+// sameMachine: two ways that lead to one machine. Both said what tells it from any other: that, and only that. Else
+// ( an errand that did not say it ) the same ssh name but for the user, the same label, or the same hostname answered.
+func sameMachine(o, n MachineNote) bool {
+	switch {
+	case o.Cache != n.Cache:
+		return false // ( its agents are others: a place of its own )
+	case o.ID != "" && n.ID != "":
+		return o.ID == n.ID
+	}
+	return afterUser(o.Host) == afterUser(n.Host) || (n.Label != "" && n.Label == o.Label) || (n.Hostname != "" && n.Hostname == o.Hostname)
+}
+
+// Ledger: the machines known, this one first, then the most recently used. Each has a name of its own: two that
+// would have one are told apart by the hostname they answered, else by how they are reached.
 func Ledger(here string) []Machine {
 	var groups []Machine
 	for _, n := range ledgerNotes() {
 		at := -1
 		for i, m := range groups {
 			for _, o := range m.Notes {
-				if o.Cache != n.Cache {
-					continue // ( its agents are others: a place of its own )
-				}
-				if afterUser(o.Host) == afterUser(n.Host) || (n.Label != "" && n.Label == o.Label) || (n.Hostname != "" && n.Hostname == o.Hostname) {
+				if sameMachine(o, n) {
 					at = i
 				}
 			}
 		}
 		if at < 0 {
-			name := n.Host
-			for _, m := range groups {
-				if m.Name == name && n.Cache != "" {
-					name = n.Host + " ( " + n.Cache + " )"
-				}
-			}
-			groups = append(groups, Machine{Name: name})
+			groups = append(groups, Machine{Name: n.Host})
 			at = len(groups) - 1
 		}
 		groups[at].Notes = append(groups[at].Notes, n)
@@ -409,11 +428,28 @@ func Ledger(here string) []Machine {
 		}
 	}
 	sort.SliceStable(groups, func(i, j int) bool { return groups[i].Used() > groups[j].Used() })
+	taken := map[string]bool{here: true}
+	for i := range groups {
+		g := &groups[i]
+		if taken[g.Name] {
+			n := g.Notes[0]
+			for _, aside := range []string{n.Cache, n.Host, strings.Join(n.Options, " "), n.Hostname} {
+				if aside != "" && aside != g.Name && !taken[g.Name+" ( "+aside+" )"] {
+					g.Name += " ( " + aside + " )"
+					break
+				}
+			}
+			for k, base := 2, g.Name; taken[g.Name]; k++ {
+				g.Name = fmt.Sprintf("%s ( %d )", base, k)
+			}
+		}
+		taken[g.Name] = true
+	}
 	return append([]Machine{{Name: here}}, groups...)
 }
 
-// UsedMachine: work is sent to a machine
-func UsedMachine(h HostSpec, hostname string) {
+// UsedMachine: work is sent to a machine, which answered its hostname and what tells it from any other ( "": not said )
+func UsedMachine(h HostSpec, hostname, id string) {
 	if h.VM != nil {
 		return // ( the machine that boots it says what it holds )
 	}
@@ -424,6 +460,9 @@ func UsedMachine(h HostSpec, hostname string) {
 	n.Used = kit.Seconds(time.Now())
 	if hostname != "" {
 		n.Hostname = hostname
+	}
+	if id != "" {
+		n.ID = id
 	}
 	n.Write()
 }
