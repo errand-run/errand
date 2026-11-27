@@ -63,7 +63,7 @@ func Artefacts(stack []project.Layer) []Artefact {
 				out = append(out, Artefact{l, MambaLabel(l)})
 			}
 		case "Apptainer", "Docker", "Podman":
-			if l.String("image") != "" { // ( a layer that only names where to find an image has nothing of its own )
+			if l.String("image") != "" || (l.Type() == "Apptainer" && l.String("recipe") != "") { // ( a layer that only names where to find an image has nothing of its own )
 				out = append(out, Artefact{l, containerName(l)})
 			}
 		}
@@ -87,7 +87,7 @@ var notAWord = regexp.MustCompile(`[^\w.+-]+`)
 func (a Artefact) Slug() string {
 	identity := a.Name + "\x00" + a.Layer.String("root_prefix") + "\x00" + a.Layer.String("executable")
 	if a.isContainer() { // a/cuda.sif and b/cuda.sif are two things
-		identity += "\x00" + a.Layer.String("image")
+		identity += "\x00" + a.Layer.String("image") + "\x00" + a.Layer.String("recipe")
 	}
 	sum := sha256.Sum256([]byte(identity))
 	return strings.Trim(notAWord.ReplaceAllString(a.Name, "-"), "-") + "-" + hex.EncodeToString(sum[:])[:8]
@@ -171,7 +171,7 @@ func (a Artefact) Simple() bool { return a.Layer.Type() == "Uv" }
 func (a Artefact) Probe(ctx Context) string {
 	switch a.Layer.Type() {
 	case "Apptainer", "Docker", "Podman":
-		return a.containerProbe()
+		return a.containerProbe(ctx.Root)
 	}
 	return "false" // ( an environment of errand's is looked at by the agent, in its store: agent/mamba.go )
 }
@@ -181,7 +181,7 @@ func (a Artefact) Probe(ctx Context) string {
 func (a Artefact) Stamp(ctx Context) string {
 	switch a.Layer.Type() {
 	case "Apptainer", "Docker", "Podman":
-		return a.containerStamp()
+		return a.containerStamp(ctx.Root)
 	}
 	return "" // ( an environment of errand's has its stamp in its store: agent/mamba.go )
 }
@@ -192,7 +192,7 @@ func (a Artefact) Steps(ctx Context) []string {
 	l := a.Layer
 	switch l.Type() {
 	case "Apptainer", "Docker", "Podman":
-		return a.containerSteps()
+		return a.containerSteps(ctx.Root)
 	}
 	return nil
 }
@@ -224,7 +224,7 @@ func Check(stack []project.Layer) error {
 		case "Missing": // what this machine lacks to reach the environment: said, rather than nothing declared
 			return ErrDeclared(MissingSays(l))
 		case "Apptainer":
-			if l.String("image") == "" && l.String("run_from") == "" {
+			if l.String("image") == "" && l.String("run_from") == "" && l.String("recipe") == "" {
 				return ErrDeclared("an Apptainer layer names its image")
 			}
 		case "Docker", "Podman":
@@ -283,12 +283,12 @@ func Enter(l project.Layer, ctx Context, binds []string, argv []string) (Command
 	if from := l.String("run_from"); from != "" { // a path to expand where it runs: through a shell
 		return Command{[]string{"sh", "-c", "exec " + sh(enter...) + " " + from + ` "$@"`, "sh"}, map[string]string{}}, nil
 	}
-	image := l.String("image")
+	image := ImageOf(l, ctx.Root)
 	if !filepath.IsAbs(image) {
 		image = filepath.Join(ctx.Root, image)
 	}
 	if _, err := os.Stat(image); err != nil {
-		return Command{}, ErrDeclared("the image " + l.String("image") + " is not there" + map[bool]string{true: " ( errand setup builds it )", false: ", and no recipe builds it"}[l.String("recipe") != ""])
+		return Command{}, ErrDeclared("the image " + image + " is not there" + map[bool]string{true: " ( errand setup builds it )", false: ", and no recipe builds it"}[l.String("recipe") != ""])
 	}
 	return Command{append(append(enter, image), argv...), map[string]string{}}, nil
 }

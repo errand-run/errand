@@ -173,11 +173,12 @@ asked for up the chain of agents. No `build_on` for environments.
   --no-install-project` into the store, the project itself `-e` in the overlay.
 - **Venv** names an interpreter, and nothing else.
 - **An image's** identity is its whole declaration, the files `%files`, `COPY` and `ADD` take included; one errand has no
-  record of is built again, aside. Two departures, to be looked at again: an Apptainer image with no `image` goes to
-  `errand-outputs/images/<recipe>.sif`, a path that does not change with its hash ( the record holds the hash; a build that
-  replaces it keeps `.prev` ), so that the carrying of `build_on`, which works on the project's copies, is unchanged; and a
-  Docker image still names its tag.
+  record of is built again, aside. An Apptainer image with no `image` is `<errand's directory>/images/<recipe>-<hash>.sif`:
+  one there was made by errand, for whichever project. `build_on` builds it in the builder's cache and carries it into the
+  cache where it runs; the agents say where each is. A Docker image still names its tag.
 - **Windows**: the installed image goes to `<errand's directory>/windows/<name>`, shared; the project keeps its data disk. It
   was already named by what it is installed from; an ISO of the project now names it with the project's path. An image the
   project installed before is still booted where it is.
-- Not done: the store in `errand caches` ( it is tidied by the agent's round only ), dynamic dependencies of `develop`.
+- `errand caches` shows the store of each machine ( environments, images, installed Windows, and what no project declares ),
+  and tidies it as the agent's round does; `--unused DAYS` and `--dry-run` as for the libraries' caches.
+- Not done: dynamic dependencies of `develop`.

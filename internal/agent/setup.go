@@ -401,6 +401,15 @@ func (s setting) lacks(a layer.Artefact) error {
 func (s setting) decide(a layer.Artefact, want string) (present bool, record buildRecord, stamp, state string, build, moved bool) {
 	present, record, stamp = s.look(a)
 	state = verdict(want, record, stamp)
+	if present && state == "found" && record.Built == nil && layer.InStore(a.ImagePath(s.root)) {
+		// in errand's cache, named by what it is made of: made by errand, for this project or another ( ADR 0044 )
+		record = buildRecord{V: 1, Built: &builtInfo{want, stamp, "built", nowSaid(), "errand's cache"}}
+		if !s.dryRun {
+			_ = kit.WriteRecord(filepath.Join(s.records(), a.Slug()+".json"), record)
+		}
+		state = "ok"
+	}
+
 	// the file is not the one errand left, while its record is there: it was changed outside errand
 	moved = present && record.Built != nil && record.Built.Stamp != "" && stamp != "" && record.Built.Stamp != stamp
 	// the last attempt left something to make up for -- not for what is built aside: what failed then touched
@@ -428,7 +437,7 @@ func (s setting) decide(a layer.Artefact, want string) (present bool, record bui
 func (s setting) replaces(a layer.Artefact, build, moved bool) error {
 	if build && moved && !s.force && a.Aside() {
 		return fmt.Errorf("%s was changed outside errand since errand made it, and its recipe changed too: building it replaces it ( the one replaced is kept as %s.prev ); `errand setup --force` goes ahead",
-			a.Name, a.Layer.String("image"))
+			a.Name, a.ImagePath(s.root))
 	}
 	return nil
 }
@@ -439,6 +448,7 @@ type CarriedImage struct {
 	Slug    string `json:"slug"`
 	Image   string `json:"image"`   // its path, from the project's root
 	Builder string `json:"builder"` // the environment it is built in
+	Build   bool   `json:"build"`   // whether it is to be made ( asked with `all`, one that is current is said too )
 }
 
 // wanted: what of a stack is built elsewhere, and must be made now -- not built here: asked for, by whoever drives.
@@ -453,8 +463,11 @@ func wanted(stack []project.Layer, s setting, all bool) ([]CarriedImage, error) 
 		if err := s.replaces(a, build, moved); err != nil {
 			return nil, err
 		}
+		if all && !build {
+			out = append(out, CarriedImage{a.Name, a.Slug(), a.ImagePath(s.root), a.Builder(), false})
+		}
 		if build {
-			out = append(out, CarriedImage{a.Name, a.Slug(), a.Layer.String("image"), a.Builder()})
+			out = append(out, CarriedImage{a.Name, a.Slug(), a.ImagePath(s.root), a.Builder(), true})
 		}
 	}
 	return out, nil
@@ -479,7 +492,7 @@ func (s setting) received(a layer.Artefact, from string) error {
 		return err
 	}
 	defer log.Close()
-	for _, step := range a.Installs() {
+	for _, step := range a.Installs(s.root) {
 		s.say("    $ " + step)
 		fmt.Fprintf(log, "$ %s\n", step)
 		if code, _ := s.line(step, log); code != 0 {
@@ -593,6 +606,11 @@ func ensure(stack []project.Layer, s setting) error {
 			break
 		}
 	}
+	for _, a := range artefacts { // an image in errand's cache: which project uses it, and when ( what tidies the cache goes by it )
+		if image := a.ImagePath(s.root); layer.InStore(image) && kit.Exists(image) && !s.dryRun {
+			notedImage(s.root, a.Layer, image)
+		}
+	}
 	return nil
 }
 
@@ -622,7 +640,7 @@ func (s setting) build(a layer.Artefact, want string, steps []string, record bui
 			_, _ = lines.Write([]byte("\n")) // ( a last line with no end )
 		}
 		if code != 0 {
-			if undo := a.Abandon(); undo != "" { // what the attempt left half made
+			if undo := a.Abandon(s.root); undo != "" { // what the attempt left half made
 				s.line(undo, nil)
 			}
 			record.V = 1
@@ -673,7 +691,7 @@ func stateOf(stack []project.Layer, s setting) string {
 		}
 		if state == "found" { // nothing recorded and everything present: somebody else's doing, which will be adopted
 			state = "ok"
-			if a.Aside() && record.Built == nil { // ...unless it is an image errand builds: never adopted ( ADR 0044 )
+			if a.Aside() && record.Built == nil && !layer.InStore(a.ImagePath(s.root)) { // ...unless it is an image errand builds: never adopted ( ADR 0044 )
 				state = "stale"
 			}
 		}

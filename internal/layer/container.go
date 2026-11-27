@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/errand-run/errand/internal/project"
+	"github.com/errand-run/errand/internal/system"
 )
 
 // isEngine: `Docker` and `Podman`, the layers that enter an image through a container engine
@@ -51,9 +52,13 @@ func apptainerExe(a Artefact) string {
 	return "apptainer"
 }
 
-// containerName: what the layer is called, as a person reads it ( `apptainer:cuda.sif`, `docker:myproj:1` )
+// containerName: what the layer is called, as a person reads it ( `apptainer:cuda.sif`, `docker:myproj:1` ); an image
+// in errand's cache by its recipe ( `apptainer:cuda.def` )
 func containerName(l project.Layer) string {
 	if l.Type() == "Apptainer" {
+		if l.String("image") == "" {
+			return "apptainer:" + filepath.Base(l.String("recipe"))
+		}
 		return "apptainer:" + filepath.Base(l.String("image"))
 	}
 	e := l.String("engine")
@@ -62,6 +67,33 @@ func containerName(l project.Layer) string {
 	}
 	return e + ":" + l.String("image")
 }
+
+// ImageOf: where an Apptainer image is, from the project's root at `root` -- the one the layer names, or, built from a recipe
+// and not named, in errand's directory of this machine, named by what it is made of ( ADR 0044 ): shared by the projects
+// that build the same, never changed once built
+func ImageOf(l project.Layer, root string) string {
+	if image := l.String("image"); image != "" || l.Type() != "Apptainer" {
+		return image
+	}
+	recipe := l.String("recipe")
+	if recipe == "" || strings.Contains(recipe, "://") {
+		return ""
+	}
+	stem := strings.TrimSuffix(filepath.Base(recipe), filepath.Ext(recipe))
+	return filepath.Join(ImagesStore(), stem+"-"+Artefact{Layer: l}.Fingerprint(Context{Root: root})+".sif")
+}
+
+// ImagesStore: where this machine keeps the images errand builds that no layer names
+func ImagesStore() string { return filepath.Join(system.Cache(), "images") }
+
+// InStore: whether an image is one of errand's cache, which only errand writes
+func InStore(image string) bool {
+	rel, err := filepath.Rel(ImagesStore(), image)
+	return err == nil && !strings.HasPrefix(rel, "..") && filepath.IsAbs(image)
+}
+
+// ImagePath: where the artefact's image is, for the project at `root`
+func (a Artefact) ImagePath(root string) string { return ImageOf(a.Layer, root) }
 
 // Aside: what a build cannot harm, and so is attempted on a suspicion: an image made from a recipe
 func (a Artefact) Aside() bool { return a.isContainer() && a.Layer.String("recipe") != "" }
@@ -140,8 +172,8 @@ func recipeSources(root, recipe string, apptainer bool) []string {
 // containerFields: what an image is made from, besides its recipe's contents. How it is entered ( `flags`, `mounts` )
 // and where it is built ( `scratch`, `fakeroot` ) do not change what comes out, and are not here.
 func (a Artefact) containerFields() []string {
-	if a.Layer.Type() == "Apptainer" {
-		return []string{"type", "image", "recipe", "pip", "build_flags"}
+	if a.Layer.Type() == "Apptainer" { // ( not where it goes: an image moved is the same image )
+		return []string{"type", "recipe", "pip", "build_flags"}
 	}
 	return []string{"type", "image", "recipe", "pip", "engine"}
 }
@@ -238,9 +270,9 @@ func (a Artefact) Built() project.Layer {
 }
 
 // Installs: the lines run where the image is used, once it is there
-func (a Artefact) Installs() []string {
+func (a Artefact) Installs(root string) []string {
 	if install := a.Layer.String("install"); install != "" {
-		return []string{strings.ReplaceAll(install, "{image}", Quote(a.Layer.String("image")))}
+		return []string{strings.ReplaceAll(install, "{image}", Quote(a.ImagePath(root)))}
 	}
 	return nil
 }
@@ -250,11 +282,11 @@ func (a Artefact) Installs() []string {
 func (a Artefact) Shows() bool { return a.isContainer() }
 
 // Abandon: a line that removes what a failed build left half made
-func (a Artefact) Abandon() string {
+func (a Artefact) Abandon(root string) string {
 	if a.Layer.Type() != "Apptainer" {
 		return ""
 	}
-	image := a.Layer.String("image")
+	image := a.ImagePath(root)
 	return sh("rm", "-f", image+".new", image+".new.pip", image+".new.pip.def")
 }
 
@@ -276,15 +308,15 @@ func (a Artefact) Made(stamp string) (float64, bool) {
 	return when, err == nil
 }
 
-func (a Artefact) containerProbe() string {
+func (a Artefact) containerProbe(root string) string {
 	if a.Layer.Type() == "Apptainer" {
-		return sh("test", "-e", a.Layer.String("image"))
+		return sh("test", "-e", a.ImagePath(root))
 	}
 	return sh(engine(a), "image", "inspect", a.Layer.String("image"))
 }
 
-func (a Artefact) containerStamp() string {
-	image := a.Layer.String("image")
+func (a Artefact) containerStamp(root string) string {
+	image := a.ImagePath(root)
 	if a.Layer.Type() == "Apptainer" {
 		q := Quote(image)
 		return "stat -c '%Y %s' " + q + " || stat -f '%m %z' " + q
@@ -299,9 +331,9 @@ func replaceLine(new, image string) string {
 }
 
 // containerSteps: what makes the image, or brings it where it is -- each a line of shell, run from the project's root
-func (a Artefact) containerSteps() []string {
+func (a Artefact) containerSteps(root string) []string {
 	l := a.Layer
-	image, recipe, pip := l.String("image"), l.String("recipe"), l.Strings("pip")
+	image, recipe, pip := a.ImagePath(root), l.String("recipe"), l.Strings("pip")
 	if a.Layer.Type() != "Apptainer" {
 		e := engine(a)
 		if recipe == "" { // nobody builds it here: fetched
@@ -318,7 +350,7 @@ func (a Artefact) containerSteps() []string {
 		return nil // an image somebody else builds: nothing to say about it
 	}
 	if a.Builder() != "" {
-		return a.Installs() // built elsewhere, and carried: what is left to do here is what is done with it
+		return a.Installs(root) // built elsewhere, and carried: what is left to do here is what is done with it
 	}
 	exe := apptainerExe(a)
 	target := image + ".new"
@@ -346,7 +378,7 @@ func (a Artefact) containerSteps() []string {
 				" && "+build(target+".pip", def)+" && mv -f "+Quote(target+".pip")+" "+Quote(target)+" && rm -f "+Quote(def))
 	}
 	steps = append(steps, replaceLine(target, image))
-	return append(steps, a.Installs()...) // where it runs, for a site that only executes images from a place of its own
+	return append(steps, a.Installs(root)...) // where it runs, for a site that only executes images from a place of its own
 }
 
 // kept: the paths of an image a project's push must leave alone, from its root -- an image built where it is used is

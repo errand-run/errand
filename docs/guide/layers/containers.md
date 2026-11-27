@@ -24,7 +24,7 @@ Runs the command with `apptainer exec`.
 
 | | |
 |---|---|
-| `image` | the `.sif`, relative to the project root. With a `recipe`, optional: `errand-outputs/images/<recipe>.sif` |
+| `image` | the `.sif`, relative to the project root. With a `recipe`, optional: the image is then in errand's cache of the machine, named by what it is made of ( `~/.cache/errand/main/images/<recipe>-<hash>.sif` ), shared by the projects that build the same, and never changed once built |
 | `recipe` | the `.def` it is built from. A change to it, or to a file its `%files` copies, is a reason to rebuild |
 | `flags` | passed to `apptainer exec`: `--nv`, `--nvccli` |
 | `mounts` | `{ path in the project: path in the container }` |

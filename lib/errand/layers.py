@@ -126,7 +126,8 @@ class Container( Layer ):
 
 @dataclass
 class Apptainer( Container ):
-    image : str = ""            # empty only in a declaration something completes: refused when used
+    # with a recipe, optional: the image is then in errand's directory of the machine, named by what it is made of
+    image : str = ""
     recipe: str | None = None
     flags : list = field( default_factory = list )
     mounts: dict = field( default_factory = dict )
@@ -145,12 +146,6 @@ class Apptainer( Container ):
     install    : str | None = None
     run_from   : str | None = None
     exe        : str = "apptainer"
-
-    def __post_init__( self ):
-        # an image errand builds needs no name of its own ( ADR 0044 ): it goes with what errand keeps for the project
-        if not self.image and self.recipe and "://" not in self.recipe:
-            stem = self.recipe.replace( "\\", "/" ).rsplit( "/", 1 )[ -1 ].rsplit( ".", 1 )[ 0 ] or "image"
-            self.image = f"errand-outputs/images/{stem}.sif"
 
 
 @dataclass

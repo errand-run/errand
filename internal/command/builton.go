@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -128,11 +129,25 @@ func carryOne(t *reach.Term, doc *project.Document, dest *reach.HostSpec, l *rea
 	if err != nil {
 		return fmt.Errorf("%s: asked of %s: %w", w.Name, w.Builder, err)
 	}
-	var builds []agent.CarriedImage
-	_ = reach.DecodeInto(got["wanted"], &builds)
-	if len(builds) > 0 {
+	var there []agent.CarriedImage // the image as the builder has it: where, and whether it is to be made
+	_ = reach.DecodeInto(got["wanted"], &there)
+	if len(there) != 1 {
+		return fmt.Errorf("%s: %s did not say where it builds it", w.Name, w.Builder)
+	}
+	builderRoot := kit.Text(where["root"])
+	builderImage := there[0].Image // its path there: in errand's cache of that machine, or the project's copy
+	if !path.IsAbs(filepath.ToSlash(builderImage)) {
+		builderImage = path.Join(filepath.ToSlash(builderRoot), filepath.ToSlash(builderImage))
+	}
+	if there[0].Build {
 		say(fmt.Sprintf("  %s is built in %s", w.Name, w.Builder))
-		if err := buildIn(t, doc, w, builderName, builder, mine, o); err != nil {
+		at := mine // made where the builder keeps it, whoever's path that is
+		at.Layer = project.Layer{}
+		for k, v := range mine.Layer {
+			at.Layer[k] = v
+		}
+		at.Layer["image"] = there[0].Image // ( as the builder said it: from its copy, where the build runs, or its cache )
+		if err := buildIn(t, doc, w, builderName, builder, at, o); err != nil {
 			return err
 		}
 		ask["op"], ask["slugs"], ask["from"] = "carried", []string{w.Slug}, ""
@@ -140,42 +155,79 @@ func carryOne(t *reach.Term, doc *project.Document, dest *reach.HostSpec, l *rea
 			return fmt.Errorf("%s: %w", w.Name, err)
 		}
 	}
-	// carried: from the builder's copy, through this machine, into the copy where it is used
-	builderRoot := kit.Text(where["root"])
+	// carried: from the builder, through this machine, to where it is used
 	building := len(builder.Stack) > 0 && builder.Stack[0].Type() == "Ssh"
-	stage := doc.Root // a builder on this machine: its copy is the project
+	destImage := filepath.ToSlash(w.Image)
+	if !path.IsAbs(destImage) {
+		destImage = path.Join(filepath.ToSlash(kit.Text(req["root"])), destImage)
+	}
+	if dest == nil && !building && filepath.Clean(builderImage) == filepath.Clean(destImage) {
+		return nil // one machine, one place: made where it is used
+	}
+	stage := filepath.Join(doc.OutputsDir(), "state", "carry", w.Slug)
+	_ = os.RemoveAll(stage)
+	defer os.RemoveAll(stage)
+	if err := os.MkdirAll(stage, 0o755); err != nil {
+		return err
+	}
+	file := filepath.Join(stage, path.Base(destImage)) // named as it is where it goes
 	if building {
-		stage = filepath.Join(doc.OutputsDir(), "state", "carry", w.Slug)
-		_ = os.RemoveAll(stage)
-		defer os.RemoveAll(stage)
 		host := reach.HostOf(builder.Stack[0]).Host
-		done := t.Working("work", "↓ pull "+w.Image+" ← "+host)
-		_, err := filesync.Pull(lb, builderRoot, stage, []string{w.Image}, nil, false, host, t.Say)
+		done := t.Working("work", "↓ pull "+path.Base(builderImage)+" ← "+host)
+		_, err := filesync.Pull(lb, path.Dir(builderImage), stage, []string{path.Base(builderImage)}, nil, false, host, t.Say)
 		done()
 		if err != nil {
 			return fmt.Errorf("%s could not be brought from %s: %w", w.Name, host, err)
 		}
+		if got := filepath.Join(stage, path.Base(builderImage)); got != file {
+			if err := os.Rename(got, file); err != nil {
+				return err
+			}
+		}
+	} else if err := copyFile(filepath.FromSlash(builderImage), file); err != nil { // the builder's stays its own
+		return fmt.Errorf("%s: %s did not make %s: %w", w.Name, w.Builder, builderImage, err)
 	}
-	file := filepath.Join(stage, filepath.FromSlash(w.Image))
 	if st, err := os.Stat(file); err != nil || !st.Mode().IsRegular() {
-		return fmt.Errorf("%s: %s did not make %s", w.Name, w.Builder, w.Image)
+		return fmt.Errorf("%s: %s did not make %s", w.Name, w.Builder, builderImage)
 	}
 	switch {
 	case dest != nil:
-		done := t.Working("work", "↑ send "+w.Image+" → "+dest.Host)
-		err := filesync.SendInto(l, stage, kit.Text(req["root"]), []string{w.Image}, true, "", nil)
+		done := t.Working("work", "↑ send "+path.Base(destImage)+" → "+dest.Host)
+		err := filesync.SendInto(l, stage, path.Dir(destImage), []string{path.Base(destImage)}, true, "", nil)
 		done()
 		if err != nil {
 			return fmt.Errorf("%s could not be sent to %s: %w", w.Name, dest.Host, err)
 		}
 		say(fmt.Sprintf("  %s: carried to %s", w.Image, dest.Host))
-	case building:
-		if err := moveInto(file, filepath.Join(doc.Root, filepath.FromSlash(w.Image))); err != nil {
+	default:
+		if err := moveInto(file, filepath.FromSlash(destImage)); err != nil {
 			return fmt.Errorf("%s could not be put in place: %w", w.Name, err)
 		}
 		say(fmt.Sprintf("  %s: carried here", w.Image))
 	}
 	return nil
+}
+
+// copyFile: a file copied, whole or not at all
+func copyFile(from, to string) error {
+	in, err := os.Open(from)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.Create(to + ".part")
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		_ = os.Remove(to + ".part")
+		return err
+	}
+	if err := out.Close(); err != nil {
+		return err
+	}
+	return os.Rename(to+".part", to)
 }
 
 // builderOf: the environment an image is built in -- one of the project's, by its name, or the layers written in the image's
@@ -204,7 +256,7 @@ func buildIn(t *reach.Term, doc *project.Document, w agent.CarriedImage, envName
 		lines[i] = "{ " + line + "; }"
 	}
 	script := strings.Join(lines, " && ")
-	if undo := a.Abandon(); undo != "" { // what a failed build leaves half made goes
+	if undo := a.Abandon(""); undo != "" { // what a failed build leaves half made goes
 		script = "( " + script + " ) || { " + undo + "; exit 1; }"
 	}
 	sub := runOptions{flags: map[string][]string{}, quiet: o.quiet, plain: o.plain, verbose: o.verbose, label: "build " + w.Image}

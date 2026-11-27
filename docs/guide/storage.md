@@ -67,7 +67,7 @@ Each layer that builds something says where it goes:
 | [`Micromamba`](./layers/micromamba), only named | `root_prefix`: where your environment is | `$MAMBA_ROOT_PREFIX`, else `~/.mamba` or `~/micromamba` |
 | [`Uv`](./layers/venv), [`Micromamba`](./layers/micromamba) | the `cache` of the `Ssh` | `~/.cache/errand/main/envs/`, shared by the projects |
 | [`Venv`](./layers/venv) | `python`: yours, errand builds nothing | — |
-| [`Apptainer`](./layers/containers) | `image`: relative to the project, or absolute | `errand-outputs/images/<recipe>.sif` |
+| [`Apptainer`](./layers/containers) | `image`: relative to the project, or absolute | without one, errand's cache: `~/.cache/errand/main/images/` |
 | [`Apptainer`](./layers/containers) | `scratch`: where the build unpacks and downloads | apptainer's own: `/tmp` and `~/.apptainer/cache` |
 | [`Windows`](./layers/windows) | the installed image: the `cache` of the `Ssh`; its data disk: `builds_directory` | `~/.cache/errand/main/windows/`; `errand-outputs/builds/windows/` |
 

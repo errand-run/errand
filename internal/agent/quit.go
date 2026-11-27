@@ -93,7 +93,8 @@ func serveCaches(req map[string]any, f *reach.FarChan) {
 			entries[e] = true
 		}
 		dirs := cachesHeld(caches.Truthy(req["purge"]), caches.Truthy(req["dry_run"]), unused, kit.Num(req["days"], caches.UnusedDays), entries)
-		f.Reply(map[string]any{"ok": true, "dirs": dirs, "host": reach.HereName()})
+		store := storeAnswer(caches.Truthy(req["purge"]), caches.Truthy(req["dry_run"]), unused)
+		f.Reply(map[string]any{"ok": true, "dirs": dirs, "store": store, "host": reach.HereName()})
 		return
 	}
 	f.Reply(caches.CachesAnswer(req))

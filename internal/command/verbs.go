@@ -670,8 +670,54 @@ func cachesCommand(t *reach.Term, args []string) int {
 				t.Println(line)
 			}
 		}
+		showStore(t, got["store"], dry)
 	}
 	return code
+}
+
+// showStore: errand's store on a machine ( ADR 0044 ): its environments, images and installed Windows, and what went
+func showStore(t *reach.Term, v any, dry bool) {
+	var store struct {
+		Path    string             `json:"path"`
+		Days    float64            `json:"days"`
+		Entries []agent.StoreEntry `json:"entries"`
+		Removed []string           `json:"removed"`
+	}
+	if reach.DecodeInto(v, &store) != nil || store.Path == "" {
+		return
+	}
+	t.Printf("  errand's store: %s  ( what no project declares goes after %.0f days unused )\n", store.Path, store.Days)
+	if len(store.Entries) == 0 && len(store.Removed) == 0 {
+		t.Println("    nothing")
+	}
+	for _, kind := range []string{"conda", "uv", "image", "windows"} {
+		n, size, idle, idleSize := 0, 0.0, 0, 0.0
+		for _, e := range store.Entries {
+			if e.Kind != kind {
+				continue
+			}
+			n, size = n+1, size+float64(e.Size)
+			if !e.Declared {
+				idle, idleSize = idle+1, idleSize+float64(e.Size)
+			}
+		}
+		if n == 0 {
+			continue
+		}
+		line := fmt.Sprintf("    %s: %d, %s", map[string]string{"conda": "conda environments", "uv": "uv environments", "image": "images",
+			"windows": "installed windows"}[kind], n, caches.Human(size))
+		if idle > 0 {
+			line += fmt.Sprintf(" · %d no project declares ( %s )", idle, caches.Human(idleSize))
+		}
+		t.Println(line)
+	}
+	for _, r := range store.Removed {
+		if dry {
+			t.Println("    would go: " + r)
+		} else {
+			t.Println("    removed: " + r)
+		}
+	}
 }
 
 // envsJSON: everything the project declares, as one document

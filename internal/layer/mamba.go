@@ -705,17 +705,18 @@ func (l *Lock) Choose(decl string, m Machine) (Resolution, bool) {
 
 // MambaRef: a layer of a project, and the environment it runs in here
 type MambaRef struct {
-	Root        string `json:"root"`
-	Name        string `json:"name"`
-	Declaration string `json:"declaration"`
-	ID          string `json:"id"`
-	Prefix      string `json:"prefix"`
-	Exe         string `json:"exe"`
-	Overlay     string `json:"overlay,omitempty"` // the python of the packages one works on, over the environment
-	Develop     string `json:"develop,omitempty"` // what the overlay was made of
-	UvLock      bool   `json:"uv_lock,omitempty"` // named by the project's uv.lock, with this python
-	Python      string `json:"python,omitempty"`
-	Seen        string `json:"seen"`
+	Root        string        `json:"root"`
+	Name        string        `json:"name"`
+	Declaration string        `json:"declaration"`
+	ID          string        `json:"id"`
+	Prefix      string        `json:"prefix"`
+	Exe         string        `json:"exe"`
+	Overlay     string        `json:"overlay,omitempty"` // the python of the packages one works on, over the environment
+	Develop     string        `json:"develop,omitempty"` // what the overlay was made of
+	UvLock      bool          `json:"uv_lock,omitempty"` // named by the project's uv.lock, with this python
+	Python      string        `json:"python,omitempty"`
+	Layer       project.Layer `json:"layer,omitempty"` // for an image of the cache: the layer that makes it
+	Seen        string        `json:"seen"`
 }
 
 // RefPath: where the store says what a layer of the project at `root` runs in

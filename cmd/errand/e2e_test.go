@@ -2609,6 +2609,77 @@ errand.envs[ "box" ] = errand.Env( [ errand.Ssh( host = "box", root = "copy/proj
 	}
 }
 
+// An image no layer names is in errand's cache of the machine, named by what it is made of: built once for every project
+// that builds the same, another when its recipe changes, and carried from a builder's cache into this machine's ( ADR 0044 )
+func TestAnImageInErrandsCache(t *testing.T) {
+	p := newPlace(t)
+	p.env = append(p.env, python(t)...)
+	p.apptainer()
+	declare := `import errand
+errand.envs[ "c" ] = errand.Env( [ errand.Apptainer( recipe = "images/a.def" ) ] )
+errand.envs[ "builder" ] = errand.Env( [ errand.Ssh( host = "box", root = "copy/builder" ) ] )
+errand.envs[ "carried" ] = errand.Env( [ errand.Apptainer( recipe = "images/b.def", build_on = "builder" ) ] )
+`
+	p.write("errand-envs.py", declare)
+	p.write("images/a.def", "Bootstrap: docker\nFrom: alpine\n")
+	p.write("images/b.def", "Bootstrap: docker\nFrom: debian\n")
+	store := filepath.Join(p.cache(), "images")
+	inStore := func(prefix string) []string {
+		got, _ := filepath.Glob(filepath.Join(store, prefix+"-*.sif"))
+		return got
+	}
+	builds := func() int { return nLines(p.builds()) }
+
+	o := p.errand("", "run", "-q", "--env", "c", "sh", "-c", "echo in $IN_CONTAINER")
+	if o.code != 0 || len(inStore("a")) != 1 || o.out != "in "+filepath.Base(inStore("a")[0])+"\n" || builds() != 1 {
+		t.Fatalf("built in the cache, entered there: exit %d %q %q %v", o.code, o.out, o.err, inStore("a"))
+	}
+	if _, err := os.Stat(filepath.Join(p.root, "images", "a.sif")); err == nil {
+		t.Error("an image in the project")
+	}
+	// another project that builds the same: nothing built
+	other := *p
+	other.root = filepath.Join(filepath.Dir(p.root), "other")
+	other.write("errand-envs.py", declare)
+	other.write("images/a.def", "Bootstrap: docker\nFrom: alpine\n")
+	if o = other.errand("", "run", "-q", "--env", "c", "true"); o.code != 0 || builds() != 1 {
+		t.Errorf("another project, the same image: exit %d %q, built %d times", o.code, o.err, builds())
+	}
+	if o = other.errand("", "envs", "c"); !strings.Contains(o.out, " ok ") {
+		t.Errorf("its state there: %q", o.out)
+	}
+	// a recipe that changes: another image, the first one left for whoever uses it
+	p.write("images/a.def", "Bootstrap: docker\nFrom: alpine:4\n")
+	if o = p.errand("", "run", "-q", "--env", "c", "true"); o.code != 0 || len(inStore("a")) != 2 || builds() != 2 {
+		t.Errorf("another recipe: exit %d %q %v", o.code, o.err, inStore("a"))
+	}
+	// built in the builder's cache, over there, and carried into this machine's
+	if o = p.errand("", "run", "-q", "--env", "carried", "true"); o.code != 0 || len(inStore("b")) != 1 {
+		t.Fatalf("carried into the cache: exit %d %q %v", o.code, o.err, inStore("b"))
+	}
+	if got, _ := filepath.Glob(filepath.Join(p.farCache(), "images", "b-*.sif")); len(got) != 1 || filepath.Base(got[0]) != filepath.Base(inStore("b")[0]) {
+		t.Errorf("in the builder's cache, by the same name: %v", got)
+	}
+	if o = p.errand("", "run", "-q", "--env", "carried", "true"); o.code != 0 || builds() != 3 || strings.Contains(o.err, "carried") {
+		t.Errorf("made once, carried once: exit %d %q, built %d times", o.code, o.err, builds())
+	}
+	// `errand caches` shows the store; what no project declares goes, here when it is unused for 0 days
+	if o = p.errand("", "caches"); o.code != 0 || !strings.Contains(o.out, "errand's store: "+filepath.Join(p.cache(), "envs")) || !strings.Contains(o.out, "images: 3") {
+		t.Errorf("errand caches: %d %q %q", o.code, o.out, o.err)
+	}
+	first := inStore("a")
+	_ = os.RemoveAll(other.root) // the project that still made the first image is gone
+	if o = p.errand("", "caches", "--unused", "0", "--dry-run"); strings.Count(o.out, "would go: ") != 1 || len(inStore("a")) != 2 {
+		t.Errorf("a dry run: %q", o.out)
+	}
+	if o = p.errand("", "caches", "--unused", "0"); strings.Count(o.out, "removed: ") != 1 || len(inStore("a")) != 1 {
+		t.Errorf("removed: %q %v", o.out, inStore("a"))
+	}
+	if o = p.errand("", "run", "-q", "--env", "c", "true"); o.code != 0 || builds() != 3 {
+		t.Errorf("the image still declared stays: exit %d, built %d times, %v then %v", o.code, builds(), first, inStore("a"))
+	}
+}
+
 func TestAnImageIsBuiltInAnotherEnvironment(t *testing.T) {
 	p := newPlace(t)
 	p.env = append(p.env, python(t)...)

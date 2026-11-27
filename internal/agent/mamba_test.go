@@ -39,8 +39,27 @@ func TestTheStoreIsTidied(t *testing.T) {
 	_ = os.MkdirAll(filepath.Dir(layer.RefPath(root, l)), 0o755)
 	_ = kit.WriteRecord(layer.RefPath(root, l), layer.MambaRef{Root: root, Declaration: "d", ID: "declared", Prefix: kept, Seen: old})
 
+	// images of the cache: the one the project's recipe makes stays, an old one goes
+	_ = os.MkdirAll(filepath.Join(root, "c"), 0o755)
+	_ = os.WriteFile(filepath.Join(root, "c", "a.def"), []byte("Bootstrap: docker\n"), 0o644)
+	app := project.Layer{"type": "Apptainer", "recipe": "c/a.def"}
+	declaredImage := layer.ImageOf(app, root)
+	_ = os.MkdirAll(layer.ImagesStore(), 0o755)
+	oldImage := filepath.Join(layer.ImagesStore(), "a-0123.sif")
+	for _, img := range []string{declaredImage, oldImage} {
+		_ = os.WriteFile(img, []byte("sif"), 0o644)
+		_ = os.WriteFile(img+".used", nil, 0o644)
+		long := now.Add(-40 * 24 * time.Hour)
+		_ = os.Chtimes(img+".used", long, long)
+	}
+	notedImage(root, app, declaredImage)
+	_ = os.Chtimes(declaredImage+".used", now.Add(-40*24*time.Hour), now.Add(-40*24*time.Hour))
+
 	gone := PurgeMambaStore(now, false, false, nil)
-	if len(gone) != 2 {
+	if !kit.Exists(declaredImage) || kit.Exists(oldImage) {
+		t.Errorf("images: the declared one there %v, the old one there %v", kit.Exists(declaredImage), kit.Exists(oldImage))
+	}
+	if len(gone) != 3 {
 		t.Errorf("what went: %v", gone)
 	}
 	for p, want := range map[string]bool{kept: true, unusedLong: false, unusedLately: true, replaced: false} {
@@ -54,7 +73,7 @@ func TestTheStoreIsTidied(t *testing.T) {
 	}
 	// the project gone, its environment is no longer declared
 	_ = os.RemoveAll(root)
-	if gone := PurgeMambaStore(now, false, false, nil); len(gone) != 1 || kit.IsDir(kept) {
+	if gone := PurgeMambaStore(now, false, false, nil); len(gone) != 2 || kit.IsDir(kept) || kit.Exists(declaredImage) {
 		t.Errorf("a project that is gone: %v", gone)
 	}
 }

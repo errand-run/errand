@@ -113,8 +113,8 @@ def check_stack( stack, where = "" ):
             raise ValueError( f"{kind} must be the first layer, or follow its Ssh{where}" )
         if isinstance( layer, L.WindowsBox ) and not i:
             raise ValueError( f"WindowsBox must follow the Ssh that reaches the machine{where}" )
-        if isinstance( layer, L.Container ) and not getattr( layer, "image", "x" ):
-            raise ValueError( f"{kind}( image = ... ) is empty: name the image" )
+        if isinstance( layer, L.Container ) and not getattr( layer, "image", "x" ) and not ( isinstance( layer, L.Apptainer ) and layer.recipe ):
+            raise ValueError( f"{kind}( image = ... ) is empty: name the image, or the recipe that builds it" )
         if isinstance( layer, L.Micromamba ) and not layer.name and not ( layer.python or layer.packages or layer.pip
                                                                           or layer.requirements or layer.develop ):
             raise ValueError( f"{kind}( name = ... ) is empty: name the environment, or declare what it holds" )
