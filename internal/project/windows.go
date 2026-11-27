@@ -42,7 +42,11 @@ func orBool(l Layer, name string, otherwise bool) bool {
 // imageName: an installed image is named by what it was installed from -- an ISO by its path, which is of the machine that
 // boots it: the same name whichever machine the command is typed on ( another ISO at that path: `setup --force` )
 func imageName(l Layer, root string) string {
-	parts := []any{windowsRecipe, orString(l, "iso", ""), orString(l, "key", ""), l["index"], orString(l, "disk", "64G"),
+	iso := orString(l, "iso", "")
+	if iso != "" && !strings.Contains(iso, "://") && !filepath.IsAbs(iso) { // a file of the project: its image is the project's
+		iso = filepath.Join(root, iso)
+	}
+	parts := []any{windowsRecipe, iso, orString(l, "key", ""), l["index"], orString(l, "disk", "64G"),
 		orBool(l, "msvc", true), orString(l, "python", GuestPython)}
 	for _, p := range l.Strings("provision") {
 		if strings.HasSuffix(p, ".ps1") {

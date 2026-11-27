@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/errand-run/errand/internal/queue"
+	"github.com/errand-run/errand/internal/system"
 )
 
 // vmImageDays: an evaluation lasts 180 days, less a little: past it, Windows stops by itself every hour
@@ -18,9 +19,21 @@ func (w VmWant) Dir() string {
 	return filepath.Join(CopyRoot(w.Root), filepath.FromSlash(w.Image))
 }
 
+// Base: where the installed image is -- in errand's directory of the machine that boots it, shared by every project that
+// installs the same ( ADR 0044 ); a project's own directory when it was installed there before
+func (w VmWant) Base() string {
+	shared := filepath.Join(system.Cache(), "windows", w.Name)
+	if _, err := os.Stat(filepath.Join(shared, "ready")); err != nil {
+		if _, err := os.Stat(filepath.Join(w.Dir(), "ready")); err == nil {
+			return w.Dir()
+		}
+	}
+	return shared
+}
+
 // Installed: why the image cannot be booted; "" when it can
 func (w VmWant) Installed() string {
-	st, err := os.Stat(filepath.Join(w.Dir(), "ready"))
+	st, err := os.Stat(filepath.Join(w.Base(), "ready"))
 	switch {
 	case err != nil:
 		return "windows is not installed yet on " + queue.Host()

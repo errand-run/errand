@@ -17,6 +17,7 @@
 package layer
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -65,12 +66,75 @@ func containerName(l project.Layer) string {
 // Aside: what a build cannot harm, and so is attempted on a suspicion: an image made from a recipe
 func (a Artefact) Aside() bool { return a.isContainer() && a.Layer.String("recipe") != "" }
 
-// containerInputs: the recipe, when it is a file of the project ( a URI such as `docker://…` is the recipe itself )
-func (a Artefact) containerInputs() []string {
-	if r := a.Layer.String("recipe"); r != "" && !strings.Contains(r, "://") {
-		return []string{r}
+// containerInputs: the recipe, when it is a file of the project ( a URI such as `docker://…` is the recipe itself ), and
+// what it copies from the project into the image ( ADR 0044 ): a file `%files` or `COPY` takes changes the image as much as
+// a line of the recipe
+func (a Artefact) containerInputs(root string) []string {
+	r := a.Layer.String("recipe")
+	if r == "" || strings.Contains(r, "://") {
+		return nil
 	}
-	return nil
+	return append([]string{r}, recipeSources(root, r, a.Layer.Type() == "Apptainer")...)
+}
+
+// recipeSources: the paths of the project a recipe copies into the image, from the project's root -- `%files` of an
+// Apptainer definition ( not `%files from <stage>` ), `COPY` and `ADD` of a Dockerfile ( not `--from=` ). A source that
+// is a URL or a pattern is left out: the first is the recipe's to fetch, the second is not one path.
+func recipeSources(root, recipe string, apptainer bool) []string {
+	data, err := os.ReadFile(filepath.Join(root, recipe))
+	if err != nil {
+		return nil
+	}
+	var out []string
+	add := func(p string) {
+		p = strings.Trim(p, `"'`)
+		if p == "" || strings.Contains(p, "://") || strings.ContainsAny(p, "*?[$") || filepath.IsAbs(p) {
+			return
+		}
+		out = append(out, filepath.ToSlash(filepath.Clean(p)))
+	}
+	inFiles := false
+	lines := strings.Split(strings.ReplaceAll(string(data), "\\\n", " "), "\n")
+	for _, line := range lines {
+		t := strings.TrimSpace(line)
+		if t == "" || strings.HasPrefix(t, "#") {
+			continue
+		}
+		if apptainer {
+			if strings.HasPrefix(t, "%") {
+				f := strings.Fields(t)
+				inFiles = f[0] == "%files" && len(f) == 1
+				continue
+			}
+			if inFiles {
+				add(strings.Fields(t)[0])
+			}
+			continue
+		}
+		f := strings.Fields(t)
+		if op := strings.ToUpper(f[0]); (op == "COPY" || op == "ADD") && len(f) > 2 {
+			var words []string
+			for _, w := range f[1:] {
+				if strings.HasPrefix(w, "--from=") {
+					words = nil
+					break
+				}
+				if !strings.HasPrefix(w, "--") {
+					words = append(words, w)
+				}
+			}
+			if strings.HasPrefix(strings.Join(words, " "), "[") { // the JSON form
+				var arr []string
+				if json.Unmarshal([]byte(strings.Join(words, " ")), &arr) == nil {
+					words = arr
+				}
+			}
+			for i := 0; i+1 < len(words); i++ { // the last one is where it goes
+				add(words[i])
+			}
+		}
+	}
+	return out
 }
 
 // containerFields: what an image is made from, besides its recipe's contents. How it is entered ( `flags`, `mounts` )

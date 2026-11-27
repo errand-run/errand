@@ -12,6 +12,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -33,6 +35,9 @@ const siteStamp = `import os, sysconfig; s = os.stat( sysconfig.get_paths()[ 'pu
 
 // what leaves in `$uv` the uv of the PATH, of its usual places, or of errand's own directory -- fetched there from
 // astral.sh when there is none: never on the PATH, never in a shell profile
+// UvFind: what leaves in `$uv` a uv to run ( see uvFind )
+const UvFind = uvFind
+
 const uvFind = `uv=$( command -v uv 2>/dev/null ); base="${ERRAND_CACHE_DIR:-$HOME/.cache/errand}"; ` +
 	`for c in "$HOME/.local/bin/uv" "$HOME/.cargo/bin/uv" "$base/uv/uv"; do [ -z "$uv" ] && [ -x "$c" ] && uv="$c"; done; ` +
 	`if [ -z "$uv" ]; then echo "errand: no uv here: fetching one into $base/uv" >&2; mkdir -p "$base"; ` +
@@ -52,26 +57,11 @@ func sh(argv ...string) string {
 func Artefacts(stack []project.Layer) []Artefact {
 	var out []Artefact
 	for _, l := range stack {
-		installs := l.String("requirements") != "" || len(l.Strings("pip")) > 0
 		switch l.Type() {
-		case "Venv":
-			python := l.String("python")
-			if python == "" {
-				python = "python"
+		case "Micromamba", "Conda", "Uv": // only what declares its contents: what only names an environment names the user's ( ADR 0044 )
+			if StoreOwned(l) {
+				out = append(out, Artefact{l, MambaLabel(l)})
 			}
-			if create, _ := l["create"].(bool); create || installs {
-				out = append(out, Artefact{l, "venv:" + python})
-			}
-		case "Micromamba", "Conda":
-			if installs || len(l.Strings("packages")) > 0 || l.String("python") != "" {
-				out = append(out, Artefact{l, strings.ToLower(l.Type()) + ":" + l.String("name")})
-			}
-		case "Uv":
-			path := l.String("path")
-			if path == "" {
-				path = ".venv"
-			}
-			out = append(out, Artefact{l, "uv:" + path})
 		case "Apptainer", "Docker", "Podman":
 			if l.String("image") != "" { // ( a layer that only names where to find an image has nothing of its own )
 				out = append(out, Artefact{l, containerName(l)})
@@ -86,18 +76,6 @@ func Artefacts(stack []project.Layer) []Artefact {
 func Kept(stack []project.Layer) []string {
 	var out []string
 	for _, a := range Artefacts(stack) {
-		var path string
-		switch a.Layer.Type() {
-		case "Venv":
-			if create, _ := a.Layer["create"].(bool); create {
-				path = filepath.Dir(filepath.Dir(a.python()))
-			}
-		case "Uv":
-			path = a.uvPath()
-		}
-		if path = filepath.ToSlash(filepath.Clean(path)); path != "." && path != "" && !filepath.IsAbs(path) && !strings.HasPrefix(path, "..") {
-			out = append(out, path)
-		}
 		out = append(out, a.kept()...)
 	}
 	return out
@@ -115,10 +93,10 @@ func (a Artefact) Slug() string {
 	return strings.Trim(notAWord.ReplaceAllString(a.Name, "-"), "-") + "-" + hex.EncodeToString(sum[:])[:8]
 }
 
-// Inputs: the files of the declaration, from the root
-func (a Artefact) Inputs() []string {
+// Inputs: the files of the declaration, from the root -- `root` is where they are read
+func (a Artefact) Inputs(root string) []string {
 	if a.isContainer() {
-		return a.containerInputs()
+		return a.containerInputs(root)
 	}
 	if r := a.Layer.String("requirements"); r != "" {
 		return []string{r}
@@ -137,21 +115,38 @@ func (a Artefact) Fingerprint(ctx Context) string {
 		b, _ := json.Marshal(a.Layer[field])
 		h.Write(append(b, 0))
 	}
-	for _, rel := range a.Inputs() {
-		if data, err := os.ReadFile(filepath.Join(ctx.Root, rel)); err == nil {
-			h.Write(data)
-		} else {
-			h.Write([]byte("<missing " + rel + ">"))
-		}
+	for _, rel := range a.Inputs(ctx.Root) {
+		hashInput(h, ctx.Root, rel)
 	}
 	return hex.EncodeToString(h.Sum(nil))[:16]
 }
 
-func (a Artefact) python() string {
-	if p := a.Layer.String("python"); p != "" {
-		return venvPython(p)
+// hashInput: a file of the declaration into a hash -- its contents, or for a directory each file's path and contents
+func hashInput(h io.Writer, root, rel string) {
+	at := filepath.Join(root, rel)
+	st, err := os.Stat(at)
+	if err != nil {
+		fmt.Fprintf(h, "<missing %s>", rel)
+		return
 	}
-	return "python"
+	if !st.IsDir() {
+		if data, err := os.ReadFile(at); err == nil {
+			fmt.Fprintf(h, "%s\x00", rel)
+			h.Write(data)
+		}
+		return
+	}
+	_ = filepath.WalkDir(at, func(p string, e fs.DirEntry, err error) error {
+		if err != nil || e.IsDir() {
+			return nil
+		}
+		if data, err := os.ReadFile(p); err == nil {
+			r, _ := filepath.Rel(root, p)
+			fmt.Fprintf(h, "%s\x00", filepath.ToSlash(r))
+			h.Write(data)
+		}
+		return nil
+	})
 }
 
 // OnWindows: whether lines are run where there is no shell ( a variable: a test says so too )
@@ -168,61 +163,17 @@ func venvPython(p string) string {
 	return p
 }
 
-func (a Artefact) uvPython() string { return venvPython(a.uvPath() + "/bin/python") }
-
 // Simple: whether what makes it, and what it looks like, are lines with no shell in them: single commands, which Windows
 // can start
-func (a Artefact) Simple() bool { return a.Layer.Type() == "Venv" || a.Layer.Type() == "Uv" }
-
-// Present: whether the thing is there, asked without a shell
-func (a Artefact) Present(ctx Context) bool {
-	p := a.python()
-	if a.Layer.Type() == "Uv" {
-		p = a.uvPython()
-	}
-	if strings.ContainsAny(p, "/\\") {
-		if !filepath.IsAbs(p) {
-			p = filepath.Join(ctx.Root, p)
-		}
-		st, err := os.Stat(p)
-		return err == nil && !st.IsDir()
-	}
-	_, err := ctx.look(p)
-	return err == nil
-}
-
-func (a Artefact) mamba(ctx Context) []string {
-	if a.Layer.Type() == "Conda" {
-		return []string{"conda"}
-	}
-	exe := a.Layer.String("executable")
-	if exe == "" {
-		exe = "micromamba"
-	}
-	if root := mambaRoot(a.Layer, ctx); root != "" {
-		return []string{exe, "--root-prefix", root}
-	}
-	return []string{exe}
-}
-
-func (a Artefact) uvPath() string {
-	if p := a.Layer.String("path"); p != "" {
-		return p
-	}
-	return ".venv"
-}
+func (a Artefact) Simple() bool { return a.Layer.Type() == "Uv" }
 
 // Probe: a line whose exit code says whether the thing is there
 func (a Artefact) Probe(ctx Context) string {
 	switch a.Layer.Type() {
 	case "Apptainer", "Docker", "Podman":
 		return a.containerProbe()
-	case "Venv":
-		return "command -v " + Quote(a.python())
-	case "Uv":
-		return sh("test", "-x", a.uvPython())
 	}
-	return sh(append(a.mamba(ctx), "-n", a.Layer.String("name"), "run", "true")...)
+	return "false" // ( an environment of errand's is looked at by the agent, in its store: agent/mamba.go )
 }
 
 // Stamp: a line that prints what the thing looks like from outside -- by convention the date it was last written
@@ -231,94 +182,19 @@ func (a Artefact) Stamp(ctx Context) string {
 	switch a.Layer.Type() {
 	case "Apptainer", "Docker", "Podman":
 		return a.containerStamp()
-	case "Venv":
-		return sh(a.python(), "-c", siteStamp)
-	case "Uv":
-		return sh(a.uvPython(), "-c", siteStamp)
 	}
-	// rewritten by every install into the prefix, whoever asked for it
-	file := `"$CONDA_PREFIX/conda-meta/history"`
-	return sh(append(a.mamba(ctx), "-n", a.Layer.String("name"), "run", "sh", "-c", "stat -c '%Y %s' "+file+" || stat -f '%m %z' "+file)...)
+	return "" // ( an environment of errand's has its stamp in its store: agent/mamba.go )
 }
 
-func (a Artefact) installs(pip ...string) []string {
-	var steps []string
-	if r := a.Layer.String("requirements"); r != "" {
-		steps = append(steps, sh(append(pip, "-r", r)...))
-	}
-	if list := a.Layer.Strings("pip"); len(list) > 0 {
-		steps = append(steps, sh(append(pip, list...)...))
-	}
-	return steps
-}
-
-// fetchMicromamba: a line that puts the micromamba binary at `exe` when it is not there. Only for a declared path: a
-// bare `micromamba` says nothing about where to put it.
-func fetchMicromamba(exe string) string {
-	q, tmp := Quote(exe), Quote(exe+".part")
-	url := `https://micro.mamba.pm/api/micromamba/"$p"/latest`
-	return "test -x " + q + ` || { case "$(uname -s)-$(uname -m)" in Linux-x86_64) p=linux-64;; Linux-aarch64) p=linux-aarch64;; ` +
-		`Linux-ppc64le) p=linux-ppc64le;; Darwin-arm64) p=osx-arm64;; Darwin-x86_64) p=osx-64;; ` +
-		`*) echo "micromamba: no build for $(uname -sm)" >&2; false;; esac && mkdir -p "$(dirname ` + q + `)" && ` +
-		`{ curl -fsSL ` + url + ` || wget -qO- ` + url + `; } | tar -xjO bin/micromamba > ` + tmp + ` && chmod +x ` + tmp + ` && mv ` + tmp + ` ` + q + `; }`
-}
-
-// Steps: what makes the thing, or brings it up to date -- each a line of shell, run from the project's root.
-//
-// `micromamba create -n x` on an environment that exists is not a no-op and not an update: it resolves the named
-// specs into it, and `python=3.13` over a 3.14 environment takes every package installed for 3.14 out with it. So
-// whether it exists is asked on the spot, by the step itself: created when it is not there, installed into when it is.
+// Steps: what makes the thing, or brings it up to date -- each a line of shell, run from the project's root. An
+// environment of errand's has none: it is resolved, built and never changed, by the agent ( agent/mamba.go ).
 func (a Artefact) Steps(ctx Context) []string {
 	l := a.Layer
 	switch l.Type() {
 	case "Apptainer", "Docker", "Podman":
 		return a.containerSteps()
-	case "Venv":
-		var steps []string
-		if create, _ := l["create"].(bool); create {
-			steps = append(steps, sh("python3", "-m", "venv", filepath.Dir(filepath.Dir(a.python()))))
-		}
-		return append(steps, a.installs(a.python(), "-m", "pip", "install")...)
-	case "Uv":
-		create := []string{"venv", a.uvPath()}
-		if v := l.String("python"); v != "" {
-			create = append(create, "--python", v)
-		}
-		find := uvFind + ` && "$uv" `
-		if OnWindows {
-			find = "uv " // ( found by whoever runs the line )
-		}
-		made := find + sh(create...)
-		if !OnWindows { // a venv that is there is made anew, which a recent uv does only when it is told -- and only a venv
-			made = "if [ -f " + Quote(a.uvPath()+"/pyvenv.cfg") + " ]; then export UV_VENV_CLEAR=1; fi; " + made
-		}
-		steps := []string{made}
-		for _, s := range a.installs("pip", "install", "--python", a.uvPython()) {
-			steps = append(steps, find+s)
-		}
-		return steps
 	}
-	exe, name := a.mamba(ctx), l.String("name")
-	var channels []string
-	for _, c := range l.Strings("channels") {
-		channels = append(channels, "-c", c)
-	}
-	var spec []string
-	if v := l.String("python"); v != "" {
-		spec = append(spec, "python="+v)
-	}
-	spec = append(append(spec, "pip"), l.Strings("packages")...)
-	install := "true"
-	if len(l.Strings("packages")) > 0 || l.String("python") != "" {
-		install = sh(append(append(append(exe, "install", "-y", "-n", name), channels...), spec...)...)
-	}
-	create := sh(append(append(append(exe, "create", "-y", "-n", name), channels...), spec...)...)
-	var steps []string
-	if declared := l.String("executable"); declared != "" && l.Type() == "Micromamba" {
-		steps = append(steps, fetchMicromamba(declared))
-	}
-	steps = append(steps, "if "+a.Probe(ctx)+" >/dev/null 2>&1; then "+install+"; else "+create+"; fi")
-	return append(steps, a.installs(append(exe, "-n", name, "run", "python", "-m", "pip", "install")...)...)
+	return nil
 }
 
 // MissingSays: what a `Missing` layer says is lacking, and what to write for it

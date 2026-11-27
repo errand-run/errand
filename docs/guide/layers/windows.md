@@ -41,11 +41,13 @@ in it (cl, link, msbuild, cmake, ninja) and calls `vcvars64` before every comman
 What it costs, and when:
 
 - **The install** is a build like any other layer's: `errand setup` does it, a changed declaration redoes
-  it, `--dry-run` says it would. The disk image is the project's: it goes to `errand-outputs/builds/windows/`
-  in the project's copy over there ( or under `builds_directory` ), named by what it was installed
-  from. The ISO is downloaded to `builds/downloads/` and removed once the install is done. Once a new
-  image is ready, the images no environment of the project declares any more are removed. Projects
-  share one image by pointing [`builds_directory`](../configuration#configure) at a shared directory.
+  it, `--dry-run` says it would. The installed image is named by what it was installed from ( the ISO, the
+  key, the index, the Build Tools, the Python, the provisioning ) and kept in errand's directory of the machine
+  that boots it, `~/.cache/errand/main/windows/` ( or under the `cache` of the `Ssh` ): every project that
+  installs the same boots the same image, installed once ( [ADR 0044](../../adr/0044-what-a-layer-builds-is-named-by-what-defines-it) ).
+  The ISO is downloaded beside it and removed once the install is done. An image nothing booted for 30 days
+  ( 7 on a shared machine ) is removed. What is the project's — its data disk, `E:` — stays in
+  `errand-outputs/builds/windows/` of the project's copy over there ( or under `builds_directory` ).
 - **A boot** starts from a fresh copy-on-write layer over that image — nothing a run left behind
   survives a restart — and the machine then stays up while a command uses it, or something errand
   started runs in it (a command whose laptop closed included), then `keep` more. All that time

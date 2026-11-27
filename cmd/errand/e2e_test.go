@@ -19,6 +19,7 @@ import (
 
 	"github.com/errand-run/errand/internal/draw"
 	"github.com/errand-run/errand/internal/kit"
+	"github.com/errand-run/errand/internal/layer"
 	"github.com/errand-run/errand/internal/runinfo"
 	"github.com/errand-run/errand/internal/system"
 )
@@ -864,116 +865,154 @@ chmod +x "$3/bin/python"
 	return dir
 }
 
-func TestEnvironmentsAreKeptCurrent(t *testing.T) {
+// uvTool: a `uv` that does what errand asks of it, quickly and without a network -- a python 3.12.7, a resolution that
+// pins every package at 1.0 with a hash ( `broken` fails, `slow` takes a second ), a venv whose python says it is one, an
+// installation that leaves what pip would ( a dist-info ), and the packages installed by each venv in its `installed`
+func (p *scene) uvTool() string {
+	dir := p.tools()
+	_ = os.WriteFile(filepath.Join(dir, "py312"), []byte("#!/bin/sh\n[ \"$1\" = -c ] && { echo 3.12.7; exit 0; }\necho \"py312 $*\"\n"), 0o755)
+	_ = os.WriteFile(filepath.Join(dir, "uv"), []byte(`#!/bin/sh
+here="$(cd "$(dirname "$0")" && pwd)"
+echo "$*" >> "$here/uv.log"
+cmd="$1"; shift
+case "$cmd" in
+python) [ "$1" = find ] && echo "$here/py312"; exit 0;;
+sync) set -- "$UV_PROJECT_ENVIRONMENT"; echo synced > "$here/synced";;
+esac
+case "$cmd" in
+venv|sync) prefix="$1"; mkdir -p "$prefix/bin" "$prefix/lib/python3.12/site-packages"; echo x > "$prefix/pyvenv.cfg"; : >> "$prefix/installed"
+  printf '#!/bin/sh\necho "the venv'"'"'s python: $*"\n' > "$prefix/bin/python"; chmod +x "$prefix/bin/python"; exit 0;;
+pip) sub="$1"; shift; out=""; in=""; py=""
+  while [ $# -gt 0 ]; do case "$1" in -o) out="$2"; shift 2;; -r) in="$2"; shift 2;; --python) py="$2"; shift 2;; --python-version) shift 2;; -*) shift;; *) in="$1"; shift;; esac; done
+  case "$sub" in
+  compile) : > "$out"
+    while read -r line; do n=$(echo "$line" | sed 's/[^A-Za-z0-9_.-].*//'); [ -z "$n" ] && continue
+      case "$n" in broken) echo "error: no matching distribution for broken" >&2; exit 1;; slow) sleep 1;; esac
+      printf '%s==1.0 \\\n    --hash=sha256:%s\n' "$n" "$(echo "$n" | cksum | cut -d' ' -f1)" >> "$out"
+    done < "$in"; exit 0;;
+  install) prefix="$(dirname "$(dirname "$py")")"; site="$prefix/lib/python3.12/site-packages"
+    while read -r line; do n="${line%%==*}"; echo "$n" >> "$prefix/installed"
+      mkdir -p "$site/$n-1.0.dist-info"; printf 'Name: %s\nVersion: 1.0\n\n' "$n" > "$site/$n-1.0.dist-info/METADATA"; echo uv > "$site/$n-1.0.dist-info/INSTALLER"
+    done < "$in"; exit 0;;
+  freeze) exit 0;;
+  esac;;
+esac
+exit 0
+`), 0o755)
+	return dir
+}
+
+func TestAnEnvironmentIsBuiltInTheStore(t *testing.T) {
 	p := newPlace(t)
 	p.env = append(p.env, python(t)...)
-	p.tools()
+	tools := p.uvTool()
 	declare := func(pip string) {
 		p.write("errand-envs.py", `import errand
-errand.envs[ "v" ] = errand.Env( [ errand.Venv( python = "env/bin/python", create = True, requirements = "requirements.txt", pip = [ `+pip+` ] ) ] )
+errand.envs[ "v" ] = errand.Env( [ errand.Uv( name = "v", python = "3.12", requirements = "requirements.txt", pip = [ `+pip+` ] ) ] )
 errand.default_env = "v"
 `)
 	}
 	declare(`"numpy"`)
 	p.write("requirements.txt", "scipy\n")
 	p.write("job.py", "pass\n")
-	installed := func() string { return read(t, filepath.Join(p.root, "env", "installed")) }
-	record := filepath.Join(p.root, "errand-outputs", "builds", "records")
+	store := filepath.Join(p.cache(), "envs", "uv")
+	envsIn := func() []string {
+		got, _ := filepath.Glob(filepath.Join(store, "*", "installed"))
+		return got
+	}
+	uvAsked := func(what string) int { return strings.Count(read(t, filepath.Join(tools, "uv.log")), what) }
 
 	if o := p.errand("", "envs"); !strings.Contains(o.out, "v ") || !strings.Contains(o.out, "not built") {
 		t.Fatalf("before anything: %q %q", o.out, o.err)
 	}
-	// the first command that needs it builds it, where it runs, and says so
+	// the first command that needs it resolves it, builds it in the store, and the lock is written here
 	o := p.errand("", "run", "job.py", "a")
-	if o.code != 0 || o.out != "the venv's python: "+p.root+"/job.py a\n" || !strings.Contains(o.err, "bringing up to date venv:env/bin/python") {
+	if o.code != 0 || !strings.HasPrefix(o.out, "the venv's python: ") || !strings.Contains(o.err, "building uv:v") || !strings.Contains(o.err, "written into errand-envs.lock") {
 		t.Fatalf("built by the first command: exit %d, %q %q", o.code, o.out, o.err)
 	}
-	if installed() != "pip install -r requirements.txt\npip install numpy\n" {
-		t.Fatalf("what was installed: %q", installed())
+	if got := envsIn(); len(got) != 1 || read(t, got[0]) != "numpy\nscipy\n" {
+		t.Fatalf("what was installed: %v", got)
 	}
 	if o = p.errand("", "envs"); !strings.Contains(o.out, " ok ") {
 		t.Errorf("once built: %q", o.out)
 	}
-	// nothing changed: nothing is built again, and nothing is said
-	if o = p.errand("", "run", "job.py"); o.code != 0 || strings.Contains(o.err, "bringing") || installed() != "pip install -r requirements.txt\npip install numpy\n" {
-		t.Errorf("built again with nothing changed: %q %q", o.err, installed())
+	// nothing changed: nothing resolved, nothing built, nothing said
+	compiled := uvAsked("pip compile")
+	if o = p.errand("", "run", "job.py"); o.code != 0 || strings.Contains(o.err, "building") || uvAsked("pip compile") != compiled {
+		t.Errorf("built again with nothing changed: %q", o.err)
 	}
-	// its declaration changes -- a file it names, or what it lists: the next command brings it up to date
+	// its declaration changes: another environment, the first one left as it is
 	p.write("requirements.txt", "scipy\nsympy\n")
 	if o = p.errand("", "envs"); !strings.Contains(o.out, "stale") {
 		t.Errorf("a changed requirements file: %q", o.out)
 	}
-	if o = p.errand("", "run", "--no-setup", "-q", "job.py"); o.code != 0 || strings.Count(installed(), "\n") != 2 {
-		t.Errorf("--no-setup built something: %q", installed())
+	if o = p.errand("", "run", "--no-setup", "-q", "job.py"); o.code != 0 || len(envsIn()) != 1 {
+		t.Errorf("--no-setup built something: %d %v", o.code, envsIn())
 	}
-	if o = p.errand("", "run", "-q", "job.py"); o.code != 0 || strings.Count(installed(), "\n") != 4 {
-		t.Errorf("brought up to date: exit %d, %q %q", o.code, o.err, installed())
+	if o = p.errand("", "run", "-q", "job.py"); o.code != 0 || len(envsIn()) != 2 {
+		t.Errorf("another declaration, another environment: exit %d, %q %v", o.code, o.err, envsIn())
 	}
-	if made := read(t, filepath.Join(p.root, "env", "made")); made != "made\nmade\n" {
-		t.Logf("( the venv's creation was run %d times )", strings.Count(made, "\n"))
+	lock, _ := layer.ReadLock(p.root)
+	if len(lock.Envs) != 1 {
+		t.Errorf("the lock holds what is declared, and only that: %d", len(lock.Envs))
 	}
 
-	// a build that fails stops the run, says where its output is, and is tried again by the next command
+	// a resolution that fails stops the run, and is tried again by the next command
 	declare(`"numpy", "broken"`)
 	o = p.errand("", "run", "job.py")
-	if o.code != 1 || o.out != "" || !strings.Contains(o.err, "failed while preparing venv:env/bin/python") || !strings.Contains(o.err, "no matching distribution") {
-		t.Fatalf("a build that fails: exit %d, %q %q", o.code, o.out, o.err)
-	}
-	if o.result.Status != "FAIL" || !strings.Contains(*o.result.Error, "failed while preparing") {
-		t.Errorf("its run's record: %+v", o.result)
-	}
-	if o = p.errand("", "envs"); !strings.Contains(o.out, "last build failed") {
-		t.Errorf("after a failure: %q", o.out)
-	}
-	if logs, _ := filepath.Glob(filepath.Join(record, "*.log")); len(logs) != 1 || !strings.Contains(read(t, logs[0]), "no matching distribution") {
-		t.Errorf("the output of the last attempt: %v", logs)
+	if o.code != 1 || !strings.Contains(o.err, "no matching distribution") || o.result.Status != "FAIL" {
+		t.Fatalf("a resolution that fails: exit %d, %q %q", o.code, o.out, o.err)
 	}
 	declare(`"numpy"`)
-	before := strings.Count(installed(), "\n")
-	if o = p.errand("", "run", "-q", "job.py"); o.code != 0 || strings.Count(installed(), "\n") == before {
-		t.Errorf("tried again after a failure: exit %d, %q", o.code, o.err)
+	if o = p.errand("", "run", "-q", "job.py"); o.code != 0 || strings.Contains(o.err, "building") {
+		t.Errorf("back to a declaration built before: exit %d, %q", o.code, o.err)
 	}
 
-	// what is there and was never seen was built by somebody: adopted, not rebuilt
-	_ = os.RemoveAll(record)
-	before = strings.Count(installed(), "\n")
-	if o = p.errand("", "run", "-q", "job.py"); o.code != 0 || strings.Count(installed(), "\n") != before {
-		t.Errorf("an environment never seen before was rebuilt: %q", o.err)
+	// changed by hand: refused, and said what to declare; --force builds it again from the lock, beside it
+	got := envsIn()
+	var prefix string
+	for _, g := range got {
+		if strings.Contains(read(t, g), "sympy") {
+			prefix = filepath.Dir(g)
+		}
 	}
-	if o = p.errand("", "envs"); !strings.Contains(o.out, "adopted") {
-		t.Errorf("after an adoption: %q", o.out)
+	site := filepath.Join(prefix, "lib", "python3.12", "site-packages", "six-1.0.dist-info")
+	_ = os.MkdirAll(site, 0o755)
+	_ = os.WriteFile(filepath.Join(site, "METADATA"), []byte("Name: six\nVersion: 1.0\n\n"), 0o644)
+	_ = os.WriteFile(filepath.Join(site, "INSTALLER"), []byte("pip\n"), 0o644)
+	if o = p.errand("", "run", "-q", "job.py"); o.code == 0 || !strings.Contains(o.err, "changed by hand") || !strings.Contains(o.err, `add "six==1.0" to `+"`pip`") {
+		t.Errorf("changed by hand: exit %d, %q", o.code, o.err)
 	}
-	// errand setup: now, and nothing else; --dry-run says what it would run; --force rebuilds what was adopted
-	if o = p.errand("", "setup", "--dry-run", "--force"); o.code != 0 || !strings.Contains(o.err, "would run: python3 -m venv env") || strings.Count(installed(), "\n") != before {
+	if o = p.errand("", "envs"); !strings.Contains(o.out, "changed by hand") {
+		t.Errorf("its state: %q", o.out)
+	}
+	if o = p.errand("", "setup", "--dry-run", "--force"); o.code != 0 || !strings.Contains(o.err, "would build uv:v from the lock") {
 		t.Errorf("setup --dry-run: exit %d, %q", o.code, o.err)
 	}
-	if o = p.errand("", "setup", "--force"); o.code != 0 || !strings.Contains(o.err, "rebuilding venv:env/bin/python") || strings.Count(installed(), "\n") == before {
-		t.Errorf("setup --force: exit %d, %q", o.code, o.err)
+	compiled = uvAsked("pip compile")
+	if o = p.errand("", "setup", "--force"); o.code != 0 || !strings.Contains(o.err, "-2") || uvAsked("pip compile") != compiled {
+		t.Errorf("setup --force, from the lock: exit %d, %q", o.code, o.err)
 	}
-	if o = p.errand("", "envs"); !strings.Contains(o.out, " ok ") {
-		t.Errorf("after setup --force: %q", o.out)
+	if o = p.errand("", "run", "-q", "job.py"); o.code != 0 {
+		t.Errorf("in the one built again: %q", o.err)
 	}
 
 	// two commands at once that need the same thing built: one builds it, the other waits for it
 	declare(`"numpy", "slow"`)
-	before = strings.Count(installed(), "\n")
 	first, second := p.command("run", "job.py"), p.command("run", "job.py")
 	var said1, said2 bytes.Buffer
 	first.Stderr, second.Stderr = &said1, &said2
 	_ = first.Start()
 	_ = second.Start()
 	err1, err2 := first.Wait(), second.Wait()
-	if err1 != nil || err2 != nil || strings.Count(installed(), "\n") != before+2 {
-		t.Errorf("two at once: %v %v, %d installs\n%s\n%s", err1, err2, strings.Count(installed(), "\n")-before, said1.String(), said2.String())
+	if both := said1.String() + said2.String(); err1 != nil || err2 != nil || strings.Count(both, "building uv:v in") != 1 {
+		t.Errorf("two at once: %v %v\n%s\n%s", err1, err2, said1.String(), said2.String())
 	}
-	if both := said1.String() + said2.String(); strings.Count(both, "bringing up to date") != 1 || !strings.Contains(both, "is being prepared by") {
-		t.Errorf("two at once, what was said:\n%s\n%s", said1.String(), said2.String())
-	}
-	if locks, _ := filepath.Glob(filepath.Join(record, "*.lock")); len(locks) != 0 {
+	if locks, _ := filepath.Glob(filepath.Join(store, "*.lock")); len(locks) != 0 {
 		t.Errorf("a lock left: %v", locks)
 	}
 
-	// launched and left: the installation goes on without whoever asked
+	// launched and left: the environment is built without whoever asked, and its resolution said at the next command
 	declare(`"slow", "more"`)
 	o = p.errand("", "run", "--batch", "-q", "job.py")
 	if waited := o.finishedAt.Sub(o.startedAt); o.code != 0 || waited > 900*time.Millisecond {
@@ -986,53 +1025,69 @@ errand.default_env = "v"
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
-	if !strings.Contains(o.out, "ended: PASS") || !strings.Contains(installed(), "pip install slow more") {
-		t.Errorf("installed in the background: %q, %q", o.out, installed())
+	if !strings.Contains(o.out, "ended: PASS") {
+		t.Errorf("built in the background: %q", o.out)
+	}
+	if o = p.errand("", "run", "-q", "job.py"); o.code != 0 || !strings.Contains(o.err, "written into errand-envs.lock") || strings.Contains(o.err, "building") {
+		t.Errorf("the resolution made in the background, written down: exit %d, %q", o.code, o.err)
+	}
+}
+
+// A project's own environment, as its uv.lock says: that file is its identity, and errand's lock is not written
+func TestAUvLockIsTheIdentity(t *testing.T) {
+	p := newPlace(t)
+	p.env = append(p.env, python(t)...)
+	tools := p.uvTool()
+	p.write("errand-envs.py", "import errand\nerrand.envs[ 'u' ] = errand.Env( [ errand.Uv( python = '3.12' ) ] )\n")
+	p.write("pyproject.toml", "[project]\nname = 'proj'\nversion = '0'\n")
+	p.write("uv.lock", "version = 1\n")
+	o := p.errand("", "run", "-q", "python", "-c", "x")
+	if o.code != 0 || !strings.HasPrefix(o.out, "the venv's python: ") || !strings.Contains(read(t, filepath.Join(tools, "uv.log")), "sync --frozen --no-install-project --python 3.12") {
+		t.Fatalf("synced: exit %d %q %q", o.code, o.out, o.err)
+	}
+	if _, err := os.Stat(filepath.Join(p.root, layer.LockName)); err == nil || strings.Contains(read(t, filepath.Join(tools, "uv.log")), "pip compile") {
+		t.Error("resolved by errand, or written into its lock")
+	}
+	p.write("uv.lock", "version = 1\n# another\n")
+	if o = p.errand("", "run", "python", "-c", "x"); o.code != 0 || !strings.Contains(o.err, "building uv") {
+		t.Errorf("another uv.lock, another environment: exit %d %q", o.code, o.err)
+	}
+	if got, _ := filepath.Glob(filepath.Join(p.cache(), "envs", "uv", "*", "installed")); len(got) != 2 {
+		t.Errorf("the environments: %v", got)
 	}
 }
 
 func TestBuiltWhereItRuns(t *testing.T) {
 	p := newPlace(t)
 	p.env = append(p.env, python(t)...)
-	p.tools()
+	p.uvTool()
 	p.write("errand-envs.py", `import errand
-errand.envs[ "box" ] = errand.Env( [ errand.Ssh( host = "box", root = "copy/proj" ),
-                                     errand.Venv( python = "env/bin/python", create = True, requirements = "requirements.txt" ) ] )
+errand.envs[ "box" ] = errand.Env( [ errand.Ssh( host = "box", root = "copy/proj" ), errand.Uv( requirements = "requirements.txt" ) ] )
 `)
 	p.write("requirements.txt", "scipy\n")
 	p.write("job.py", "pass\n")
-	copyOf := filepath.Join(p.far, "home", "copy", "proj")
-	// an environment is installed where it runs, from files of the project: pushed first, built over there
+	store := filepath.Join(p.farCache(), "envs", "uv")
+	built := func() []string { got, _ := filepath.Glob(filepath.Join(store, "*", "installed")); return got }
+	// an environment is resolved and built where it runs, from files of the project pushed first; the lock is written here
 	o := p.errand("", "run", "--env", "box", "job.py")
-	if o.code != 0 || o.out != "the venv's python: "+copyOf+"/job.py\n" || !strings.Contains(o.err, "bringing up to date venv:env/bin/python") {
+	if o.code != 0 || !strings.HasPrefix(o.out, "the venv's python: ") || !strings.Contains(o.err, "building uv") || len(built()) != 1 {
 		t.Fatalf("built over there: exit %d, %q %q", o.code, o.out, o.err)
 	}
-	if read(t, filepath.Join(copyOf, "env", "installed")) != "pip install -r requirements.txt\n" {
-		t.Errorf("what was installed over there: %q", read(t, filepath.Join(copyOf, "env", "installed")))
+	if _, err := os.Stat(filepath.Join(p.root, layer.LockName)); err != nil {
+		t.Errorf("the lock, here: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(p.root, "env")); err == nil {
+	if _, err := os.Stat(filepath.Join(p.cache(), "envs", "uv")); err == nil {
 		t.Errorf("it was built here too")
 	}
-	if recs, _ := filepath.Glob(filepath.Join(copyOf, "errand-outputs", "builds", "records", "*.json")); len(recs) != 1 {
-		t.Errorf("its record lives with it, over there: %v", recs)
-	}
-	// what was built there is not removed by the next push, and is not built again
-	if o = p.errand("", "run", "--env", "box", "job.py"); o.code != 0 || strings.Contains(o.err, "bringing") || strings.Contains(o.err, "deleted there") {
+	// not built again, and the lock that is pushed changes nothing
+	if o = p.errand("", "run", "--env", "box", "job.py"); o.code != 0 || strings.Contains(o.err, "building") || strings.Contains(o.err, "deleted there") {
 		t.Errorf("a second run: exit %d, %q", o.code, o.err)
-	}
-	// ... nor by a push that walks the copy again ( its agent gone, another started: the copy is looked at whole )
-	_ = exec.Command("pkill", "-f", filepath.Join(p.farCache(), "place")).Run()
-	time.Sleep(300 * time.Millisecond)
-	p.write("job.py", "pass # changed\n")
-	if o = p.errand("", "run", "--env", "box", "job.py"); o.code != 0 || strings.Contains(o.err, "bringing") || strings.Contains(o.err, "moved aside") {
-		t.Errorf("after the copy was walked again: exit %d, %q", o.code, o.err)
 	}
 	if o = p.errand("", "envs"); !strings.Contains(o.out, "box") || !strings.Contains(o.out, " ok ") {
 		t.Errorf("its state, asked of the machine that holds it: %q %q", o.out, o.err)
 	}
 	p.write("requirements.txt", "scipy\nsympy\n")
-	if o = p.errand("", "setup", "box"); o.code != 0 || !strings.Contains(o.err, "bringing up to date") ||
-		strings.Count(read(t, filepath.Join(copyOf, "env", "installed")), "\n") != 2 {
+	if o = p.errand("", "setup", "box"); o.code != 0 || !strings.Contains(o.err, "building uv") || len(built()) != 2 {
 		t.Errorf("errand setup, over there: exit %d, %q", o.code, o.err)
 	}
 }
@@ -2263,24 +2318,17 @@ errand.envs[ "b" ] = errand.Env( [ errand.Apptainer( image = "images/b.sif", rec
 		t.Errorf("once the recipe is right: exit %d, %q", o.code, o.err)
 	}
 
-	// what is there and was never seen is adopted, unless it is older than its recipe: an image can be rebuilt without
-	// risk, and a wrong adoption has cost a release
+	// an image errand builds is never adopted ( ADR 0044 ): one there that errand has no record of is built again, aside
 	_ = os.RemoveAll(records)
 	before = builds()
-	if o = p.errand("", "run", "-q", "--env", "c", "true"); o.code != 0 || builds() != before {
-		t.Errorf("an image never seen before was rebuilt: %q", o.err)
-	}
-	if out := state("c"); !strings.Contains(out, "adopted") {
-		t.Errorf("after an adoption: %q", out)
-	}
-	_ = os.RemoveAll(records)
-	long := time.Now().Add(-48 * time.Hour)
-	_ = os.Chtimes(image, long, long)
 	if out := state("c"); !strings.Contains(out, "stale") {
-		t.Errorf("an image older than its recipe, and not known: %q", out)
+		t.Errorf("an image errand has no record of: %q", out)
 	}
-	if o = p.errand("", "run", "--env", "c", "true"); o.code != 0 || builds() != before+1 || !strings.Contains(o.err, "older than a.def, and errand has no record of it") {
-		t.Errorf("older than its recipe, not known: exit %d, %q, built %d times more", o.code, o.err, builds()-before)
+	if o = p.errand("", "run", "--env", "c", "true"); o.code != 0 || builds() != before+1 || !strings.Contains(o.err, "errand has no record of having built it") {
+		t.Errorf("not known: exit %d, %q, built %d times more", o.code, o.err, builds()-before)
+	}
+	if _, err := os.Stat(image + ".prev"); err != nil {
+		t.Errorf("the one that was there is kept: %v", err)
 	}
 	// errand setup: now, and nothing else; --dry-run says what it would run; --force rebuilds
 	before = builds()
@@ -2310,9 +2358,9 @@ errand.envs[ "b" ] = errand.Env( [ errand.Apptainer( image = "images/b.sif", rec
 	if o.code != 1 || !strings.Contains(o.err, "build_on") || !strings.Contains(o.err, "or the layers of one") {
 		t.Errorf("build_on: exit %d, %q", o.code, o.err)
 	}
-	p.write("images/b.sif", "carried by hand\n")
-	if o = p.errand("", "run", "-q", "--env", "b", "sh", "-c", "echo in $IN_CONTAINER"); o.out != "in b.sif\n" {
-		t.Errorf("an image that is there is used, whatever it is built on: %q %q", o.out, o.err)
+	p.write("images/b.sif", "carried by hand\n") // an image errand builds is not adopted ( ADR 0044 ): still refused
+	if o = p.errand("", "run", "-q", "--env", "b", "true"); o.code != 1 || !strings.Contains(o.err, "build_on") {
+		t.Errorf("an image put there by hand: exit %d %q", o.code, o.err)
 	}
 
 	// two commands at once that need the same image: one builds it, the other waits for it
@@ -2493,14 +2541,14 @@ errand.envs[ "box" ] = errand.Env( [ errand.Ssh( host = "box", root = "copy/proj
 				!strings.Contains(read(t, filepath.Join(state, "images", strings.NewReplacer("/", "_", ":", "_").Replace(tag+"-pip"))), "RUN python -m pip install numpy") {
 				t.Errorf("pip: exit %d, %q, built %d times", o.code, o.err, builds()-before)
 			}
-			// what is there and was never seen is adopted
+			// an image errand builds is never adopted ( ADR 0044 ): without its record, it is built again
 			_ = os.RemoveAll(filepath.Join(p.root, "errand-outputs", "builds", "records"))
 			before = builds()
-			if o = p.errand("", "run", "-q", "--env", "d", "true"); o.code != 0 || builds() != before {
-				t.Errorf("an image never seen before was rebuilt: %q", o.err)
+			if out := envs("d"); !strings.Contains(out, "stale") {
+				t.Errorf("without its record: %q", out)
 			}
-			if out := envs("d"); !strings.Contains(out, "adopted") {
-				t.Errorf("after an adoption: %q", out)
+			if o = p.errand("", "run", "-q", "--env", "d", "true"); o.code != 0 || builds() != before+1 {
+				t.Errorf("an image errand has no record of: exit %d %q, built %d times", o.code, o.err, builds()-before)
 			}
 			// setup says what it does, and the states are said
 			if o = p.errand("", "setup", "--force", "d"); o.code != 0 || !strings.Contains(o.err, "rebuilding "+name+":"+tag) {

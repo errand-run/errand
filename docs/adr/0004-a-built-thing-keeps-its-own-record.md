@@ -1,9 +1,12 @@
 ---
 status: accepted
 date: 2026-11-04
+amended-by: 0044
 ---
 
 # What was built is recorded where it lives, and described from both ends
+
+> **Amended by ADR 0044 (2026-11-27).** For the layers that build, an artefact is named by what defines it and never changed once built: adoption goes, what only names something is the user's and is not judged, and the records move with the artefacts into errand's store.
 
 A rebuild of the wheels found `manylinux.sif` from 2026-10-13 on the build machine, without the
 `jax` pin its recipe has had since 2026-10-14, while `.errand/env-lin_wheels.yaml` held the

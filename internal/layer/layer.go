@@ -192,13 +192,12 @@ func wrap(l project.Layer, c Command, ctx Context) (Command, error) {
 		}
 		python = venvPython(python)
 		return Command{under(c.Argv, python), c.Env}, nil
-	case "Uv":
-		path := l.String("path")
-		if path == "" {
-			path = ".venv"
-		}
-		return Command{under(c.Argv, filepath.FromSlash(venvPython(filepath.ToSlash(filepath.Join(ctx.Root, path, "bin", "python"))))), c.Env}, nil
+	case "Uv": // a venv of errand's, in its store
+		return wrapMamba(l, c, ctx)
 	case "Micromamba", "Conda":
+		if MambaOwned(l) { // errand's: in its store
+			return wrapMamba(l, c, ctx)
+		}
 		exe := l.String("executable")
 		if exe == "" {
 			exe = strings.ToLower(l.Type())
@@ -300,11 +299,15 @@ func Describe(stack []project.Layer) string {
 		what := strings.ToLower(l.Type())
 		switch l.Type() {
 		case "Micromamba", "Conda":
-			what += ":" + l.String("name")
+			if n := l.String("name"); n != "" || !MambaOwned(l) {
+				what += ":" + n
+			}
 		case "Venv":
 			what += ":" + l.String("python")
 		case "Uv":
-			what += ":" + l.String("path")
+			if n := l.String("name"); n != "" {
+				what += ":" + n
+			}
 		case "Nix":
 			if f := l.String("flake"); f != "" {
 				what += ":" + f

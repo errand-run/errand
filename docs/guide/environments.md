@@ -216,7 +216,7 @@ installed. A provider answers the paths of the files it read: errand reads the p
 - A provider that finds no way to an environment from this machine declares it anyway, as a
   [`Missing`](./layers/missing) that says what to write where.
 - A layer the user is expected to complete ( an `Apptainer` without its `image`, a `Micromamba`
-  without its `name` ) may be declared incomplete; used as it is, it is refused.
+  with neither a `name` nor contents ) may be declared incomplete; used as it is, it is refused.
 - Providers run after `errand-vars.py`, so they can read `errand.value`, and before the project's
   other files, which have the last word: they can redefine an environment, or change it in place
   ( `errand.envs[ "mylib-linux" ].stack.append( … )` ).

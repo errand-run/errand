@@ -42,6 +42,7 @@ func (a *Place) rounds() {
 			}
 			a.dropCopies(nil, true)
 			_ = caches.PurgeHeld(say)
+			_ = PurgeMambaStore(time.Now(), sharedHere(), false, say)
 			a.pruneOld(say)
 		}()
 	}

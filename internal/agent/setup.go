@@ -76,8 +76,9 @@ const (
 type setting struct {
 	root, outputs string
 	tags          map[string]any
-	environ       []string     // the surroundings its commands will have
-	say           func(string) // errand's own words about it
+	environ       []string             // the surroundings its commands will have
+	say           func(string)         // errand's own words about it
+	tell          func(map[string]any) // what whoever drives is to know: a resolution for the project's lock
 	force, dryRun bool
 	stop          <-chan struct{} // closed when whoever asked no longer wants it
 }
@@ -212,8 +213,8 @@ func (s setting) withTools(stack []project.Layer) (setting, error) {
 
 // present: whether an artefact is there
 func (s setting) present(a layer.Artefact) bool {
-	if layer.OnWindows {
-		return a.Present(s.ctx())
+	if layer.OnWindows { // ( what Windows builds is in the store: looked at there )
+		return false
 	}
 	code, _ := s.line(a.Probe(s.ctx())+" >/dev/null 2>&1", nil)
 	return code == 0
@@ -271,7 +272,7 @@ func newerInput(a layer.Artefact, root, stamp string) string {
 	if !ok {
 		return ""
 	}
-	for _, rel := range a.Inputs() {
+	for _, rel := range a.Inputs(root) {
 		if st, err := os.Stat(filepath.Join(root, rel)); err == nil && float64(st.ModTime().Unix()) > when {
 			return filepath.Base(rel)
 		}
@@ -284,8 +285,15 @@ func newerInput(a layer.Artefact, root, stamp string) string {
 // hold: the artefact taken, to build it -- waited for while another builds it. -> what lets go of it, and whether
 // somebody else built meanwhile ( the state is to be looked at again )
 func (s setting) hold(a layer.Artefact, want string) (func(), bool, error) {
-	lock := filepath.Join(s.records(), a.Slug()+".lock")
+	return s.holdAt(filepath.Join(s.records(), a.Slug()+".lock"), a.Name, want)
+}
+
+// holdAt: a lock that is a directory, with who holds it in it -- waited for while somebody holds it
+func (s setting) holdAt(lock, name, want string) (func(), bool, error) {
 	file := filepath.Join(lock, "intent.json")
+	if err := os.MkdirAll(filepath.Dir(lock), 0o755); err != nil {
+		return nil, false, err
+	}
 	waited := false
 	for {
 		err := os.Mkdir(lock, 0o755)
@@ -320,15 +328,15 @@ func (s setting) hold(a layer.Artefact, want string) (func(), bool, error) {
 			if who == "" {
 				who = "somebody"
 			}
-			s.say(fmt.Sprintf("  %s is being prepared by %s: waiting for it", a.Name, who))
+			s.say(fmt.Sprintf("  %s is being prepared by %s: waiting for it", name, who))
 		}
 		select {
 		case <-s.stop:
-			return nil, false, errors.New("stopped while it waited for " + a.Name)
+			return nil, false, errors.New("stopped while it waited for " + name)
 		case <-time.After(300 * time.Millisecond):
 		}
 	}
-	mine := intent{V: 1, What: a.Name, Fingerprint: want, Host: queue.Host(), Pid: os.Getpid(), Since: kit.Started(os.Getpid()), Started: kit.Seconds(time.Now())}
+	mine := intent{V: 1, What: name, Fingerprint: want, Host: queue.Host(), Pid: os.Getpid(), Since: kit.Started(os.Getpid()), Started: kit.Seconds(time.Now())}
 	_ = kit.WriteRecord(file, mine)
 	done := make(chan struct{})
 	go func() { // still carried out: said for who looks from another machine
@@ -403,10 +411,10 @@ func (s setting) decide(a layer.Artefact, want string) (present bool, record bui
 		switch older := newerInput(a, s.root, stamp); {
 		case moved && a.Aside(): // its recipe did not change ( the fingerprint says so ): it is somebody's, and is kept as it is
 			s.say(fmt.Sprintf("  %s: changed since errand made it, its recipe did not: adopted as it is ( errand setup --force rebuilds it )", a.Name))
-		case older == "":
-		case a.Aside() && record.Built == nil: // an adoption is a guess, and a wrong one costs a release: what a build cannot harm is rebuilt
-			s.say(fmt.Sprintf("  %s: older than %s, and errand has no record of it", a.Name, older))
+		case a.Aside() && record.Built == nil: // an image errand builds is never adopted ( ADR 0044 ): built aside, the one there kept as .prev
+			s.say(fmt.Sprintf("  %s: errand has no record of having built it", a.Name))
 			build = true
+		case older == "":
 		case a.Aside(): // a record that says its recipe is the same: a date is wrong about a `git checkout`
 		default:
 			s.say(fmt.Sprintf("  %s: older than %s: adopted as it is ( errand setup --force to rebuild )", a.Name, older))
@@ -509,6 +517,16 @@ func ensure(stack []project.Layer, s setting) error {
 	}
 	said := false
 	for _, a := range artefacts {
+		if layer.StoreOwned(a.Layer) { // errand's, in its store ( ADR 0044 )
+			ensure := s.ensureMamba
+			if a.Layer.Type() == "Uv" {
+				ensure = s.ensureUv
+			}
+			if err := ensure(a); err != nil {
+				return err
+			}
+			continue
+		}
 		want := a.Fingerprint(s.ctx())
 		path := filepath.Join(s.records(), a.Slug()+".json")
 		for {
@@ -636,6 +654,15 @@ func stateOf(stack []project.Layer, s setting) string {
 	artefacts := layer.Artefacts(stack)
 	found := map[string]bool{}
 	for _, a := range artefacts {
+		if layer.StoreOwned(a.Layer) {
+			switch state := s.stateOfMamba(a); state {
+			case "ok":
+				found["ok"] = true
+				continue
+			default:
+				return state
+			}
+		}
 		present, record, stamp := s.look(a)
 		if !present {
 			return "not built"
@@ -646,7 +673,7 @@ func stateOf(stack []project.Layer, s setting) string {
 		}
 		if state == "found" { // nothing recorded and everything present: somebody else's doing, which will be adopted
 			state = "ok"
-			if a.Aside() && newerInput(a, s.root, stamp) != "" { // ...unless it is what a build cannot harm, and older than its recipe
+			if a.Aside() && record.Built == nil { // ...unless it is an image errand builds: never adopted ( ADR 0044 )
 				state = "stale"
 			}
 		}

@@ -674,7 +674,9 @@ func (r aRun) run() int {
 	if r.leaf != nil {
 		*r.leaf = got.Note.Leaf
 	}
-	return follow(t, got.Note, viewOf(o), got.Banner, r.cwd, true)
+	v := viewOf(o)
+	v.lock = lockTaker(t, r.doc)
+	return follow(t, got.Note, v, got.Banner, r.cwd, true)
 }
 
 // askLaunch: a run asked for, and what is made ready for it said as it is made -- an image that is built first takes
@@ -685,9 +687,12 @@ func askLaunch(t *reach.Term, l *reach.Link, req map[string]any, quiet bool) (ma
 }
 
 // view is how a run is shown.
-type view struct{ quiet, plain, raw, open bool }
+type view struct {
+	quiet, plain, raw, open bool
+	lock                    func(any) // what writes a resolution into the project's lock ( ADR 0044 ), if there is a project
+}
 
-func viewOf(o runOptions) view { return view{o.quiet, o.plain, o.raw, o.open} }
+func viewOf(o runOptions) view { return view{quiet: o.quiet, plain: o.plain, raw: o.raw, open: o.open} }
 
 const openTabs = 4 // the pages one command opens; beyond, the main one, once
 
@@ -865,6 +870,9 @@ func follow(t *reach.Term, note runinfo.RunNote, o view, banner, cwd string, min
 			}
 			if text, _ := n["say"].(string); text != "" && !o.quiet {
 				t.Say(text)
+			}
+			if lk, ok := n["lock"]; ok && o.lock != nil {
+				o.lock(lk)
 			}
 			lost, _ = n["lost"].(string)
 			if more, ok := n["again"]; ok {

@@ -3,34 +3,40 @@
 ## Venv
 
 ```python
-Venv( python = "python", requirements = None, pip = [ ], create = False )
+Venv( python = "python" )
 ```
 
-A given interpreter: a venv's python, or any installed one.
+An interpreter that is there: a venv's python, or any installed one. errand never builds it, nor installs anything
+into it ( [ADR 0044](../../adr/0044-what-a-layer-builds-is-named-by-what-defines-it) ): a venv of errand's is a `Uv` one.
 
 ```python
-errand.Env( [ errand.Venv( python = ".venv-313/bin/python", requirements = "requirements.txt", create = True ) ] )
+errand.Env( [ errand.Venv( python = ".venv-313/bin/python" ) ] )
 ```
-
-| | |
-|---|---|
-| `python` | the interpreter to run |
-| `requirements` | a file, relative to the project root, installed with pip |
-| `pip` | more packages, on top |
-| `create` | make the venv when `python` points inside one that does not exist |
 
 ## Uv
 
 ```python
-Uv( path = ".venv", python = None, requirements = None, pip = [ ] )
+Uv( name = "", python = None, requirements = None, pip = [ ], develop = [ ] )
 ```
 
-A uv-managed venv of the project, at `path` relative to the project root. `python` is the version
-uv installs it with.
+A venv of errand's, made by uv in errand's store on the machine where it runs, and never changed once built.
 
-uv does not need to be installed: where it is neither on the `PATH` nor in `~/.local/bin` or
-`~/.cargo/bin`, errand fetches one from astral.sh into its cache over there
-( `~/.cache/errand/uv`, never on the `PATH`, never in a shell profile ), the one it makes its own
-Python with. A cluster's nodes are such a place.
+- **Without packages of its own** ( no `requirements`, no `pip` ), it is the project's environment, as its `uv.lock`
+  says: `uv sync --frozen` into the store, and the project itself installed `-e` over it, in an overlay. The `uv.lock`
+  and `pyproject.toml` are its identity: changed, they make another venv.
+- **With them**, they are resolved once for every platform ( `uv pip compile --universal`, with the hashes of every
+  file ), written down in the project's `errand-envs.lock`, and installed exactly so on every machine.
 
-Both are [built and kept current](../upkeep) from what they declare.
+| | |
+|---|---|
+| `name` | a label |
+| `python` | the version uv installs it with ( the exact one is written in the lock ) |
+| `requirements`, `pip` | its packages |
+| `develop` | the packages you work on, `-e` in an overlay of the project; their dependencies go into the venv |
+
+Everything else is as for [an environment of errand's](./micromamba#an-environment-of-errand-s): the store, a change by
+hand that stops the run, `errand python --env X` for an editor, the tidying. There is no `.venv` in the project.
+
+uv does not need to be installed: where it is neither on the `PATH` nor in `~/.local/bin` or `~/.cargo/bin`, errand
+fetches one from astral.sh into its cache over there ( `~/.cache/errand/uv`, never on the `PATH`, never in a shell
+profile ). A cluster's nodes are such a place.

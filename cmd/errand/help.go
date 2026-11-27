@@ -101,6 +101,7 @@ var verbs = []struct{ name, what, usage, options string }{
 	{"caches", "the caches of the libraries the runs use, and what they no longer need, removed", "errand caches [MACHINE...] [--dry-run] [--unused DAYS]", ""},
 	{"build-dir", "where what a project builds goes, made: cmake -B \"$( errand build-dir )\"", "errand build-dir [--env ENV] [NAME]", `
   --env ENV                    the environment it is built in, each its own; its machine's path, when it is elsewhere`},
+	{"python", "the interpreter an environment runs, on its machine: for an editor, or $( errand python ) x.py", "errand python [--env ENV]", ""},
 	{"check", "what errand believes, against what is there: the copies, what the next push would do, the runs in one place only", "errand check [MACHINE...] [--fix] [--bring] [--all] [--json]", `
   --fix                        put right what loses nothing: records of what is gone, locks nobody holds
   --bring                      bring back the runs that are there and not here

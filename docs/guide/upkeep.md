@@ -22,33 +22,28 @@ a changed requirements file.
 You do not have to act on `stale` or `not built` in `errand envs`. The next command that needs the
 environment builds it first, and `errand shell` does too.
 
-## What is already there is adopted, not rebuilt
+## An environment of errand's is never updated
 
-The first time errand meets an environment, it has no record of how it was built, so every layer
-looks out of date. Acting on that would mean recreating, on somebody's first command, an environment
-that has worked for months.
+A [`Micromamba`](./layers/micromamba) layer that declares its contents, and every [`Uv`](./layers/venv) layer, is
+resolved once, written down in the project's `errand-envs.lock` ( or named by the project's `uv.lock` ), built in
+errand's store on the machine, and **never changed once built**. A changed declaration makes another environment;
+nothing is half updated, and a change by hand stops the run, saying what to declare
+( [ADR 0044](../adr/0044-what-a-layer-builds-is-named-by-what-defines-it) ). A conda environment that is only named,
+or a `Venv`, is yours: errand never builds it. What follows is about images.
 
-So **an environment that is there and was never seen before is recorded as `adopted`**, and left as
-it is. Only a declaration that has *changed* since a record errand wrote itself is a reason to touch
-anything. `errand setup --force` is how you ask for the rest.
+## An image errand builds is never adopted
 
-The one exception is an image, which a build cannot harm: found older than its recipe, it is rebuilt.
-Anything else older than what it declares is adopted, with a warning.
-
-::: danger Why this matters
-`micromamba create -n x` on an existing `x` is not a no-op and not an update: it resolves the named
-specs into it, and `python=3.13` over a 3.14 environment takes every package installed for 3.14 out
-with it. An environment somebody works in must never be damaged by a declaration being read for the
-first time.
-:::
+An image built from a recipe is errand's. One that is there and that errand has no record of having built is built
+again, aside: the one there is kept as `<image>.prev`. Only an image errand built, then changed outside errand while its
+recipe did not, is kept as it is, and said; `errand setup --force` rebuilds it. An environment somebody works in is
+never damaged by a declaration read for the first time: one errand does not build is not touched.
 
 ## What errand remembers
 
 A record lives on the machine that holds what was built, in its `errand-outputs/builds/records/`
 ( or under `builds_directory` ): one yaml per artefact, with the output of the last attempt beside
 it. Both are rewritten each time; there is no history. The yaml holds the fingerprint of the
-declaration and a stamp of the result: an image's date and size, a Docker image's id, a conda
-prefix's `conda-meta/history`, a venv's `site-packages`. An artefact whose stamp changed behind
+declaration and a stamp of the result: an image's date and size, a Docker image's id. An artefact whose stamp changed behind
 errand's back is adopted again.
 
 ## When a build fails
@@ -57,8 +52,8 @@ A failed build stops the command, and is tried again by the next one, changed or
 
 **An image is built aside**, as `<image>.new`: the existing one stays whole, and
 `errand run --no-setup` can still use it. It is replaced once the new one is complete, and kept as
-`<image>.prev` until the next build. Conda environments and venvs cannot be moved once built, so they
-are updated in place: after a failure they may be half updated.
+`<image>.prev` until the next build. An environment of errand's is built in a directory of its own:
+one that fails is removed, and the one in use stays.
 
 ## What stays on the other machine
 

@@ -24,8 +24,8 @@ errand.envs[ "cluster" ] = errand.Env( [
 | [`Windows`](./windows) | a Windows virtual machine errand installs, boots and stops; first, or right after its `Ssh` |
 | [`WindowsBox`](./windows-box) | a Windows machine that is already there, right after the `Ssh` that reaches it |
 | [`Apptainer`, `Docker`, `Podman`](./containers) | a container, with its own interpreter, built from its recipe |
-| [`Micromamba`, `Conda`](./micromamba) | `micromamba -n <name> run`; nothing when that environment is already active |
-| [`Venv`, `Uv`](./venv) | a given interpreter, or a uv-managed venv of the project |
+| [`Micromamba`, `Conda`](./micromamba) | a conda environment: errand's, resolved, locked and built in its store, when it declares its contents; yours when it is only named |
+| [`Venv`, `Uv`](./venv) | an interpreter that is there, or a venv of errand's, made by uv in its store |
 | [`Nix`, `Guix`](./nix-guix) | `nix develop -c …`, `guix shell -- …` |
 | [`Module`](./module) | Lmod or environment modules, the way a cluster picks a toolchain |
 | [`Vars`](./vars) | environment variables for the child process |
@@ -45,8 +45,8 @@ nvidia-smi, and `errand run --env gpu python -c …` runs the container's python
 ## Built, and kept current
 
 What a layer needs in order to exist — an image, a conda environment, a venv — it also knows how to
-build, and errand rebuilds it when its declaration changes. What was already there is adopted, not
-rebuilt. See [Keeping environments current](../upkeep).
+build, and errand builds another when its declaration changes. What errand does not build is never
+touched. See [Keeping environments current](../upkeep).
 
 ## The preparation's own layers
 

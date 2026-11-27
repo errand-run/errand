@@ -1,9 +1,12 @@
 ---
 status: proposed
 date: 2026-11-18
+amended-by: 0043
 ---
 
 # `errand.download`: a file by its hash, in a cache errand declares itself
+
+> **Amended by ADR 0043 (2026-11-27).** What tools need ( indexes, packages, wheels ) is fetched by errand itself, checked against the lock's sha256, and brought down the chain of agents; the tools resolve and install offline from it. `errand.download`'s zone does not change.
 
 ADR 0012 gave a project cache zones. A project that downloads its input data (otrec: measured
 sinograms) still has to write the same few things: where the file goes, a check of its hash, a

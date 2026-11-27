@@ -1,9 +1,12 @@
 ---
 status: proposed
 date: 2026-11-24
+amended-by: 0043
 ---
 
 # A place has an agent, which owns its jobs; five programs
+
+> **Amended by ADR 0043 (2026-11-27).** `pip install` where there is no way out is closed: errand brings the indexes and files by requests that wait, and the tools resolve and install offline from them.
 
 ADR 0034 made errand in Go a new program. Its first piece that reached another machine ( 2026-11-24 ) went against
 what errand is built on, without saying so: no agent on the place ( a process as long as one command ), the run

@@ -22,7 +22,7 @@ func setupWindows(t *reach.Term, doc *project.Document, name string, env project
 			t.Sayf("errand: %s: %v\n", name, err)
 			return 1
 		}
-		return followSetup(t, l, map[string]any{"op": "vm_install", "vm": h.VM, "setup": w["setup"], "wanted": doc.Images(), "force": force, "dry_run": dry})
+		return followSetup(t, l, map[string]any{"op": "vm_install", "vm": h.VM, "setup": w["setup"], "wanted": doc.Images(), "force": force, "dry_run": dry}, nil)
 	}
 	mark := kit.Text(w["mark"])
 	h.Environ = t.Environ

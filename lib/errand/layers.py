@@ -78,24 +78,27 @@ class Preload( Layer ):
 
 @dataclass
 class Venv( Layer ):
-    """A specific interpreter: a venv's python, or any installed one."""
+    """An interpreter that is there: a venv's python, or any installed one. errand never builds it ( ADR 0044 ): a venv of
+    errand's is a `Uv` one."""
     python      : str = "python"
-    requirements: str | None = None
-    pip         : list = field( default_factory = list )
-    create      : bool = False          # make the venv if `python` is inside a missing one
 
 
 @dataclass
 class Micromamba( Layer ):
-    """A micromamba environment, by name."""
-    name        : str = ""          # empty only in a declaration something completes ( a package's own layers ): refused when used
+    """A conda environment ( ADR 0044 ). Declared by its contents, it is errand's: resolved where it runs, written down in
+    `errand-envs.lock`, built in errand's store and never changed once built. Only named, it is the user's, used as it is."""
+    name        : str = ""          # a label for an environment of errand's; the environment itself for one of the user's
     python      : str | None = None
     channels    : list = field( default_factory = lambda: [ "conda-forge" ] )
     packages    : list = field( default_factory = list )
     requirements: str | None = None
     pip         : list = field( default_factory = list )
-    root_prefix : str | None = None     # where `-n <name>` resolves
-    executable  : str | None = None     # the micromamba binary, when it is not on PATH -- e.g. on a compute node
+    # the packages one works on ( `"../sdot"`, `"../sdot[viz]"` ): installed `-e` in an overlay of the project, their
+    # dependencies in the environment
+    develop     : list = field( default_factory = list )
+    cuda        : bool | None = None    # False: the builds for the CPU, even on a machine with a card
+    root_prefix : str | None = None     # where `-n <name>` resolves, for an environment of the user's
+    executable  : str | None = None     # a micromamba to use instead of errand's own
 
 
 @dataclass
@@ -105,11 +108,14 @@ class Conda( Micromamba ):
 
 @dataclass
 class Uv( Layer ):
-    """A uv-managed venv in the project."""
-    path        : str = ".venv"
+    """A venv of errand's ( ADR 0044 ), made by uv in errand's store and never changed once built. Without packages of its
+    own, it is the project's environment, as its `uv.lock` says ( the project itself installed `-e` over it ); with them,
+    they are resolved for every platform and written down in `errand-envs.lock`."""
+    name        : str = ""          # a label
     python      : str | None = None
     requirements: str | None = None
     pip         : list = field( default_factory = list )
+    develop     : list = field( default_factory = list )    # the packages one works on, `-e` in an overlay
 
 
 # ── a container ──────────────────────────────────────────────────────────────
@@ -139,6 +145,12 @@ class Apptainer( Container ):
     install    : str | None = None
     run_from   : str | None = None
     exe        : str = "apptainer"
+
+    def __post_init__( self ):
+        # an image errand builds needs no name of its own ( ADR 0044 ): it goes with what errand keeps for the project
+        if not self.image and self.recipe and "://" not in self.recipe:
+            stem = self.recipe.replace( "\\", "/" ).rsplit( "/", 1 )[ -1 ].rsplit( ".", 1 )[ 0 ] or "image"
+            self.image = f"errand-outputs/images/{stem}.sif"
 
 
 @dataclass

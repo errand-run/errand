@@ -194,4 +194,4 @@ func cliMain(verb string, args []string) int {
 // carried: the verbs an agent carries out for a command line. The others are tools of a place, run by the
 // program that is typed.
 var carried = map[string]bool{"run": true, "status": true, "attach": true, "stop": true, "setup": true, "envs": true, "watch": true,
-	"list": true, "shell": true, "init": true, "forget": true, "machines": true, "agents": true, "caches": true, "check": true, "build-dir": true, "serve": true, "vm": true}
+	"list": true, "shell": true, "init": true, "forget": true, "machines": true, "agents": true, "caches": true, "check": true, "build-dir": true, "python": true, "serve": true, "vm": true}

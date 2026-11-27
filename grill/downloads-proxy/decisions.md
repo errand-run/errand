@@ -1,0 +1,14 @@
+# ADR 0043 repris : décisions
+
+- **Ce qui gêne** ( round 1 ): le TLS cassé de bout en bout ( l'outil parle HTTP à errand, qui fait le HTTPS à sa place ) et le HTTP en clair sur 127.0.0.1 ( joignable par tous les utilisateurs d'une frontale partagée ). Pas les contenus qui passent par les machines de Hugo, ni les métadonnées.
+- **La confiance vient du lock**: chaque fichier est vérifié par le hash du lock là où il est installé, quel que soit le chemin ; rien en clair hors de localhost.
+- **Plus de proxy** ( round 2, « un gros oui » ): errand télécharge lui-même chaque fichier du lock en HTTPS vérifié jusqu'à l'origine, sur la machine qui a internet ; sans internet, requête qui attend, fichier redescendu par le transport des agents ( ssh, socket unix ) ; rien en HTTP nulle part ; vérifié par son hash à l'arrivée ; l'outil installe hors ligne et revérifie. Un relais compromis peut faire échouer, jamais substituer.
+- **Un seul chemin pour installer**, connecté ou non. Un canal privé avec jeton sera un champ du layer le jour où il le faudra.
+- **Résoudre sur place, avec des index apportés** ( b ): « moins risqué et va plus dans le sens des caches bien gérés ». Le solveur tourne sur la machine qui le demande, sur des index locaux ( `file://` ) qu'errand a apportés ( détails au round 3 ).
+- **sha256 dans le lock**, pas md5 : à reprendre dans l'ADR 0044 par la session qui l'implémente.
+- **Paquets déjà extraits**: le défaut de micromamba ( `safety_checks: warn` ) est gardé ; le trou est connu et écrit.
+- **Les images restent à `build_on`**: rien pour elles dans 0043.
+- **L'outil ne touche jamais le réseau** ( round 3 ), même pour résoudre : errand apporte index et fichiers ; micromamba et uv résolvent et installent hors ligne sur des canaux et index `file://`. Chaîne de confiance : index vérifié par TLS chez errand → sha256 → lock → fichier.
+- **Conda : un canal local réduit** construit à partir des index découpés ( sommaire revérifié après 1 heure, fichiers de paquet nommés par sha256 jamais revérifiés ) ; index entier en repli pour un canal sans index découpés ; sans internet, le dernier sommaire sert, et c'est dit. Remarque de Hugo : en direct, micromamba charge de toute façon l'index entier ( 61 + 30 Mo compressés pour conda-forge `linux-64` + `noarch` ) ; le coût n'est donc pas nouveau, et les index découpés font mieux que micromamba en direct.
+- **PyPI : la boucle sur ce qu'uv dit manquer, avec un coup d'avance** ( pages des `Requires-Dist` de chaque roue apportée ) ; uv épinglé ; un message non reconnu arrête tout en le montrant.
+- **Repris de l'ADR 0043 d'origine** ( grill content-addressed-envs, round 5, non remis en cause ) : cache par machine, non précieux à 14 jours ; chaque relais garde une copie ; internet constaté et déclarable ( `Ssh( internet = False )` ) ; `errand.download` ( ADR 0013 ) garde sa zone.

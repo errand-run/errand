@@ -782,35 +782,3 @@ func TestAProjectReachedThroughALink(t *testing.T) {
 		t.Errorf("%v %q", err, out)
 	}
 }
-
-func TestAUvVenvIsMadeAnew(t *testing.T) {
-	p := newPlace(t)
-	p.env = append(p.env, python(t)...)
-	tools := p.tools()
-	// a uv as the recent ones are: a venv that is there is not replaced unless it is told to
-	_ = os.WriteFile(filepath.Join(tools, "uv"), []byte(`#!/bin/sh
-if [ "$1" = venv ]; then
-  if [ -e "$2" ] && [ "$UV_VENV_CLEAR" != 1 ]; then echo "already exists" >&2; exit 2; fi
-  mkdir -p "$2/bin"; echo x > "$2/pyvenv.cfg"; ln -s /usr/bin/python3 "$2/bin/python"; chmod +x "$2/bin/python"
-fi
-echo "$*" >> `+tools+`/asked
-`), 0o755)
-	p.write("req.txt", "a\n")
-	p.write("errand-envs.py", "import errand\nerrand.envs[ 'u' ] = errand.Env( [ errand.Uv( requirements = 'req.txt' ) ] )\n")
-	if o := p.errand("", "run", "-q", "python", "-c", "print( 1 )"); o.code != 0 || o.out != "1\n" {
-		t.Fatalf("made: %d %q %q", o.code, o.out, o.err)
-	}
-	p.write("req.txt", "b\n")
-	if o := p.errand("", "run", "-q", "python", "-c", "print( 2 )"); o.code != 0 || o.out != "2\n" {
-		t.Errorf("made anew: %d %q %q", o.code, o.out, o.err)
-	}
-	if got := read(t, filepath.Join(tools, "asked")); strings.Count(got, "venv .venv") != 2 {
-		t.Errorf("uv was asked: %s", got)
-	}
-	// what is there and is no venv is not replaced
-	p.write("mine/kept.txt", "mine\n")
-	p.write("errand-envs.py", "import errand\nerrand.envs[ 'u' ] = errand.Env( [ errand.Uv( path = 'mine' ) ] )\n")
-	if o := p.errand("", "run", "-q", "python", "-c", "print( 3 )"); o.code == 0 || read(t, filepath.Join(p.root, "mine", "kept.txt")) != "mine\n" {
-		t.Errorf("a directory that is no venv: %d %q", o.code, o.out)
-	}
-}

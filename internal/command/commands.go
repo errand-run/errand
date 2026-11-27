@@ -43,6 +43,8 @@ func command(t *reach.Term, verb string, args []string) int {
 		return agentsMain(t, args)
 	case "build-dir":
 		return buildDirMain(t, args)
+	case "python":
+		return pythonMain(t, args)
 	case "check":
 		return checkMain(t, args)
 	case "caches":

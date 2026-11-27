@@ -195,11 +195,23 @@ func (a *Place) installWindows(ctx context.Context, want reach.VmWant, s windows
 	if err := vmTools("ssh", "ssh-keygen"); err != nil {
 		return err
 	}
-	root, image := reach.CopyRoot(want.Root), want.Dir()
+	// installed in errand's directory of this machine, for every project that installs the same ( ADR 0044 ): what is
+	// the project's ( its data disk ) stays in its own
+	root, image := reach.CopyRoot(want.Root), filepath.Join(system.Cache(), "windows", want.Name)
 	if err := os.MkdirAll(image, 0o755); err != nil {
 		return err
 	}
-	iso, err := windowsISO(ctx, s.ISO, root, filepath.Join(filepath.Dir(filepath.Dir(image)), "downloads"), say)
+	installing, err := os.OpenFile(filepath.Join(image, "installing"), os.O_RDWR|os.O_CREATE, 0o644)
+	if err != nil {
+		return err
+	}
+	defer installing.Close()
+	if system.TryLock(installing) != nil {
+		return errors.New("this windows is being installed for another project on " + queue.Host() + ": once it is, it serves both")
+	}
+	defer system.Unlock(installing)
+	downloads := filepath.Join(filepath.Dir(image), ".downloads")
+	iso, err := windowsISO(ctx, s.ISO, root, downloads, say)
 	if err != nil {
 		return err
 	}
@@ -241,7 +253,7 @@ func (a *Place) installWindows(ctx context.Context, want reach.VmWant, s windows
 	}
 
 	say("  installing windows on " + queue.Host() + " -- 20 to 60 minutes, with nothing to watch ( ERRAND_VM_VNC=1 to watch on vnc://127.0.0.1:5901 there )")
-	m := &vmMachine{a: a, want: want, id: vmID(image), image: image}
+	m := &vmMachine{a: a, want: want, id: vmID(want.Dir()), image: want.Dir(), base: image}
 	name := m.id + "-install"
 	defer os.Remove(vmRecord(name))
 	began := time.Now()
@@ -286,18 +298,18 @@ func (a *Place) installWindows(ctx context.Context, want reach.VmWant, s windows
 		return err
 	}
 	say("  windows is ready on " + queue.Host() + ": " + image)
-	pruneImages(filepath.Dir(image), append([]string{want.Name}, wanted...), say)
-	_ = os.RemoveAll(filepath.Join(filepath.Dir(filepath.Dir(image)), "downloads"))
+	pruneImages(filepath.Dir(want.Dir()), append([]string{want.Name}, wanted...), say) // the project's own, of images it no longer declares
+	_ = os.RemoveAll(downloads)
 	return nil
 }
 
 // checkInstalled: it is booted once, the way every run will boot it, and asked how its setup went
 func (m *vmMachine) checkInstalled(ctx context.Context, accel []string, work, name string) error {
 	overlay := filepath.Join(work, "check.qcow2")
-	if err := qemuImg("-b", filepath.Join(m.image, "base.qcow2"), "-F", "qcow2", overlay); err != nil {
+	if err := qemuImg("-b", filepath.Join(m.base, "base.qcow2"), "-F", "qcow2", overlay); err != nil {
 		return err
 	}
-	cmd, port, gone, err := qemuUp(m.image, filepath.Join(work, "check.log"), name, func(port int) []string { return m.argv(accel, overlay, "", port) })
+	cmd, port, gone, err := qemuUp(m.base, filepath.Join(work, "check.log"), name, func(port int) []string { return m.argv(accel, overlay, "", port) })
 	if err != nil {
 		return err
 	}

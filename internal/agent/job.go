@@ -74,6 +74,7 @@ type job struct {
 	skipped      string             // why it was not run, when that is not a failure
 	next         []runinfo.Launched // the runs made after it, when it asked for what it did not have ( rerun.go )
 	notes        []string           // errand's own words about it: what is prepared for it, what it waits for
+	told         []map[string]any   // what whoever follows is to know: a resolution for the project's lock
 	quit         chan struct{}      // closed when it is told to stop
 	queued       chan struct{}      // closed once it has its place on the machine, or its turn in the queue for one
 	inLine       sync.Once
@@ -84,6 +85,15 @@ type job struct {
 func (j *job) note(text string) {
 	j.mu.Lock()
 	j.notes = append(j.notes, text)
+	j.wake()
+	j.mu.Unlock()
+	j.a.touched()
+}
+
+// tell: what whoever follows the job is to know, said to each of them
+func (j *job) tell(m map[string]any) {
+	j.mu.Lock()
+	j.told = append(j.told, m)
 	j.wake()
 	j.mu.Unlock()
 	j.a.touched()
@@ -244,7 +254,7 @@ func (j *job) run() {
 	}
 	// its environment, built or brought up to date first: by this agent, whether or not who asked stays ( ADR 0035 )
 	if !j.spec.NoSetup {
-		st := setting{root: j.rec.Project, outputs: j.outputs, tags: j.rec.Tags, environ: env, say: j.note, stop: j.quit}
+		st := setting{root: j.rec.Project, outputs: j.outputs, tags: j.rec.Tags, environ: env, say: j.note, tell: j.tell, stop: j.quit}
 		built := j.spec.Stack
 		if box := containerAt(built); box >= 0 { // ( the image is this agent's to build; what is inside is its own agent's )
 			built = built[:box+1]
@@ -664,7 +674,7 @@ func (j *job) follow(req map[string]any, f *reach.FarChan) {
 		}
 	}()
 	buf := make([]byte, kit.Chunk)
-	said, noted := "", 0
+	said, noted, toldN := "", 0, 0
 	wanted := map[string]bool{}
 	var steps *draw.StepTail // where it says it is, for whoever draws that
 	if show, _ := req["status"].(bool); show {
@@ -678,12 +688,18 @@ func (j *job) follow(req map[string]any, f *reach.FarChan) {
 		}
 		code, waiting, open, wait, next := j.code, j.waiting, j.open, j.changed, j.next
 		notes := j.notes[noted:]
+		told := j.told[toldN:]
 		j.mu.Unlock()
 		for _, text := range notes {
 			b, _ := json.Marshal(map[string]any{"say": text})
 			f.Out(kit.NOTE, b)
 		}
 		noted += len(notes)
+		for _, m := range told {
+			b, _ := json.Marshal(m)
+			f.Out(kit.NOTE, b)
+		}
+		toldN += len(told)
 		for _, w := range j.a.pendingFor(j.rec.Project) { // what nobody here has a way to: whoever follows may
 			if !wanted[w.ID] {
 				wanted[w.ID] = true

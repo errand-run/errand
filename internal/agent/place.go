@@ -609,6 +609,15 @@ func (a *Place) serve(req map[string]any, f *reach.FarChan) {
 			return
 		}
 		f.Reply(map[string]any{"ok": true, "path": dir})
+	case "python": // the interpreter an environment runs here ( `errand python` )
+		var stack []project.Layer
+		_ = reach.DecodeInto(req["stack"], &stack)
+		st := a.setting(req, nil)
+		if p, err := Python(stack, st.root); err != nil {
+			f.Fail("%v", err)
+		} else {
+			f.Reply(map[string]any{"ok": true, "path": p})
+		}
 	case "check", "check_there", "check_fix":
 		a.checkOp(req, f)
 	case "bring_runs":
@@ -716,6 +725,10 @@ func (a *Place) serve(req map[string]any, f *reach.FarChan) {
 		st.force, _ = req["force"].(bool)
 		st.dryRun, _ = req["dry_run"].(bool)
 		st.stop = f.Said // told to stop, it stops; a connection that only drops stops nothing
+		st.tell = func(m map[string]any) {
+			b, _ := json.Marshal(m)
+			f.Out(kit.NOTE, b)
+		}
 		f.Reply(map[string]any{"ok": true})
 		code := 0
 		exit := func() {

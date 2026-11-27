@@ -47,3 +47,5 @@ is in the history of the repository that was errand before this one.
 | [0040](0040-a-server-is-what-is-asked-for.md) | A server is what is asked for, and is given a port on the asker's machine | accepted |
 | [0041](0041-a-page-describes-its-service-and-is-given-an-address.md) | A page describes its service, and is given an address or a refusal | proposed |
 | [0042](0042-a-request-that-waits-keeps-its-place-for-what-it-waits-for.md) | A request that waits keeps its place for what it waits for, not for the whole machine | accepted |
+| [0043](0043-errand-makes-the-downloads.md) | errand brings the files: tools resolve and install offline, from indexes and packages errand fetched | proposed |
+| [0044](0044-what-a-layer-builds-is-named-by-what-defines-it.md) | What a layer builds is named by what defines it, kept in errand's caches, and never changed once built | proposed |

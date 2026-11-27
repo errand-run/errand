@@ -182,7 +182,7 @@ func envsMain(t *reach.Term, verb string, args []string) int {
 			}
 		}
 		where["op"], where["stack"], where["force"], where["dry_run"] = "setup", stack, force, dry
-		if code := followSetup(t, l, where); code != 0 {
+		if code := followSetup(t, l, where, lockTaker(t, doc)); code != 0 {
 			worst = code
 		}
 	}
@@ -191,7 +191,7 @@ func envsMain(t *reach.Term, verb string, args []string) int {
 
 // followSetup: an installation asked of an agent, and what it says of it said as it says it -> how it ended.
 // Ctrl-C leaves it: the agent is told, and stops the step it is at.
-func followSetup(t *reach.Term, l *reach.Link, req map[string]any) int {
+func followSetup(t *reach.Term, l *reach.Link, req map[string]any, lock func(any)) int {
 	c := l.Open(req)
 	if _, err := c.Reply(); err != nil {
 		c.Close()
@@ -238,6 +238,9 @@ func followSetup(t *reach.Term, l *reach.Link, req map[string]any) int {
 			case kit.NOTE:
 				if text, _ := said["say"].(string); text != "" {
 					t.Say(text)
+				}
+				if lk, ok := said["lock"]; ok && lock != nil {
+					lock(lk)
 				}
 			case kit.EXIT:
 				return int(kit.Num(said["code"], 1))

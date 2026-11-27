@@ -52,7 +52,8 @@ type vmMachine struct {
 	a     *Place
 	want  reach.VmWant
 	id    string
-	image string // its directory, here
+	image string // the project's directory for it, here: its data disk, what a boot leaves
+	base  string // the installed image, shared by the projects that install the same ( ADR 0044 )
 	since time.Time
 
 	mu      sync.Mutex
@@ -174,7 +175,7 @@ func (m *vmMachine) host() reach.HostSpec {
 		cache = "E:/errand-cache"
 	}
 	return reach.HostSpec{Host: vmUser + "@127.0.0.1", Windows: true, Cache: cache, Booted: true, Say: func(string) {},
-		Options: append([]string{"-p", fmt.Sprint(port), "-i", filepath.Join(m.image, "key")}, vmGuestOptions...)}
+		Options: append([]string{"-p", fmt.Sprint(port), "-i", filepath.Join(m.base, "key")}, vmGuestOptions...)}
 }
 
 // reach: the link to the guest's agent, kept
@@ -313,7 +314,7 @@ again: // one that is going down is gone before another comes
 		}
 		return nil, "", errors.New("this windows is being installed, or held by another errand")
 	}
-	m := &vmMachine{a: a, want: want, id: id, image: image, since: time.Now(), state: "queued", last: time.Now(),
+	m := &vmMachine{a: a, want: want, id: id, image: image, base: want.Base(), since: time.Now(), state: "queued", last: time.Now(),
 		changed: make(chan struct{}), quit: make(chan struct{}), lock: lock}
 	if a.machinesUp == nil {
 		a.machinesUp = map[string]*vmMachine{}
@@ -377,7 +378,7 @@ func (m *vmMachine) run(accel []string) {
 		m.flush()
 		qemuDown(cmd, gone)
 	}()
-	_ = os.Chmod(filepath.Join(m.image, "key"), 0o600) // ( ssh refuses one others may read: an ACL of the directory's, a copy )
+	_ = os.Chmod(filepath.Join(m.base, "key"), 0o600) // ( ssh refuses one others may read: an ACL of the directory's, a copy )
 	m.say("booting")
 	if why = m.awaited(gone, live); why != "" {
 		return
@@ -390,9 +391,11 @@ func (m *vmMachine) run(accel []string) {
 
 func (m *vmMachine) prepareDisks(live, overlay string) string {
 	_ = os.Remove(overlay)
-	if err := qemuImg("-b", filepath.Join(m.image, "base.qcow2"), "-F", "qcow2", overlay); err != nil {
+	if err := qemuImg("-b", filepath.Join(m.base, "base.qcow2"), "-F", "qcow2", overlay); err != nil {
 		return "failed: " + err.Error()
 	}
+	now := time.Now() // when it was last booted: what tidies the images goes by it
+	_ = os.WriteFile(filepath.Join(m.base, "used"), []byte(now.Format(time.UnixDate)+"\n"), 0o644)
 	if m.want.Data != "" {
 		if data := filepath.Join(m.image, "data.qcow2"); !kit.Exists(data) {
 			if err := qemuImg(data, m.want.Data); err != nil {

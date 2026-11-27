@@ -278,5 +278,7 @@ func (r aRun) runThere(spec runinfo.LaunchSpec) int {
 	if r.leaf != nil {
 		*r.leaf = note.Leaf
 	}
-	return follow(t, note, viewOf(o), banner, r.cwd, true)
+	v := viewOf(o)
+	v.lock = lockTaker(t, r.doc)
+	return follow(t, note, v, banner, r.cwd, true)
 }

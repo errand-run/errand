@@ -221,7 +221,7 @@ func TestAWindowsIsNotInstalledAgainForWhatIsInside(t *testing.T) {
 	_ = os.WriteFile(qemu, []byte("#!/bin/sh\nexec sleep 600\n"), 0o755)
 	p.env = append(p.env, "ERRAND_QEMU="+qemu)
 	p.write("errand-envs.py", `import errand
-errand.envs[ "in" ] = errand.Env( [ errand.Windows( msvc = False, cpus = 1, ram = "64M", keep = "1s" ), errand.Venv( python = ".venv/bin/python", create = True ) ] )
+errand.envs[ "in" ] = errand.Env( [ errand.Windows( msvc = False, cpus = 1, ram = "64M", keep = "1s" ), errand.Uv( name = "in" ) ] )
 `)
 	image := filepath.Join(p.root, "errand-outputs", "builds", "windows", imageOf(t, p))
 	_ = os.MkdirAll(image, 0o755)
@@ -230,11 +230,11 @@ errand.envs[ "in" ] = errand.Env( [ errand.Windows( msvc = False, cpus = 1, ram 
 		t.Errorf("not booted to be asked: %q %q", o.out, o.err)
 	}
 	o := p.errand("", "setup", "in", "--force", "--dry-run")
-	if o.code != 0 || strings.Contains(o.err, "would install windows") || !strings.Contains(o.err, "venv:.venv/bin/python") {
+	if o.code != 0 || strings.Contains(o.err, "would install windows") || !strings.Contains(o.err, "uv:in") {
 		t.Errorf("setup --force --dry-run: %d %q %q", o.code, o.out, o.err)
 	}
 	o = p.errand("", "setup", "in", "--force")
-	if strings.Contains(o.err, "installing windows") || strings.Contains(o.err, "downloading") || !strings.Contains(o.err, "venv:.venv/bin/python") {
+	if strings.Contains(o.err, "installing windows") || strings.Contains(o.err, "downloading") || !strings.Contains(o.err, "uv:in") {
 		t.Errorf("setup --force: %d %q %q", o.code, o.out, o.err)
 	}
 }
@@ -258,16 +258,18 @@ errand.envs[ "box" ] = errand.Env( [ errand.Ssh( host = "winbox" ), errand.Windo
 	old := filepath.Join(filepath.Dir(image), "go-old")
 	_ = os.MkdirAll(old, 0o755)
 	_ = os.WriteFile(filepath.Join(guest, "wrong"), nil, 0o644)
-	if o := p.errand("", "setup", "win"); o.code == 0 || !strings.Contains(o.err, "went wrong: failed: no way") || kit.Exists(filepath.Join(image, "ready")) {
+	if o := p.errand("", "setup", "win"); o.code == 0 || !strings.Contains(o.err, "went wrong: failed: no way") || kit.Exists(filepath.Join(p.cache(), "windows", imageOf(t, p), "ready")) {
 		t.Fatalf("a setup that fails inside: %d %q", o.code, o.err)
 	}
 	_ = os.Remove(filepath.Join(guest, "wrong"))
 	_ = os.RemoveAll(filepath.Join(base, "media"))
 	o := p.errand("", "setup", "win")
-	if o.code != 0 || !strings.Contains(o.err, "windows is ready") || !kit.Exists(filepath.Join(image, "ready")) || !kit.Exists(filepath.Join(image, "base.qcow2")) {
+	// installed in errand's directory of the machine, for every project that installs the same ( ADR 0044 )
+	installed := filepath.Join(p.cache(), "windows", imageOf(t, p))
+	if o.code != 0 || !strings.Contains(o.err, "windows is ready") || !kit.Exists(filepath.Join(installed, "ready")) || !kit.Exists(filepath.Join(installed, "base.qcow2")) {
 		t.Fatalf("installed: %d %q", o.code, o.err)
 	}
-	if kit.Exists(filepath.Join(image, "build")) || kit.Exists(old) || !kit.Exists(filepath.Join(image, "key")) {
+	if kit.Exists(filepath.Join(installed, "build")) || kit.Exists(old) || !kit.Exists(filepath.Join(installed, "key")) || kit.Exists(filepath.Join(image, "base.qcow2")) {
 		t.Errorf("what is left, beside the image")
 	}
 	media := filepath.Join(base, "media")

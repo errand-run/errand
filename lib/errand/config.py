@@ -115,8 +115,9 @@ def check_stack( stack, where = "" ):
             raise ValueError( f"WindowsBox must follow the Ssh that reaches the machine{where}" )
         if isinstance( layer, L.Container ) and not getattr( layer, "image", "x" ):
             raise ValueError( f"{kind}( image = ... ) is empty: name the image" )
-        if isinstance( layer, L.Micromamba ) and not layer.name:
-            raise ValueError( f"{kind}( name = ... ) is empty: name the environment" )
+        if isinstance( layer, L.Micromamba ) and not layer.name and not ( layer.python or layer.packages or layer.pip
+                                                                          or layer.requirements or layer.develop ):
+            raise ValueError( f"{kind}( name = ... ) is empty: name the environment, or declare what it holds" )
     if sum( isinstance( l, L.Slurm ) for l in stack ) > 1:
         raise ValueError( f"several schedulers{where}: one allocation per list; to prepare in another one, give it its own "
                           f"layers: Env( [ ... ], prepare = [ ... ] )" )

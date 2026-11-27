@@ -24,8 +24,8 @@ Runs the command with `apptainer exec`.
 
 | | |
 |---|---|
-| `image` | the `.sif`, relative to the project root |
-| `recipe` | the `.def` it is built from. A change to it is a reason to rebuild |
+| `image` | the `.sif`, relative to the project root. With a `recipe`, optional: `errand-outputs/images/<recipe>.sif` |
+| `recipe` | the `.def` it is built from. A change to it, or to a file its `%files` copies, is a reason to rebuild |
 | `flags` | passed to `apptainer exec`: `--nv`, `--nvccli` |
 | `mounts` | `{ path in the project: path in the container }` |
 | `pip` | installed **into** the image |
@@ -86,7 +86,10 @@ Podman( … )     # the same, through podman, rootless
 ```
 
 Runs the command with `docker run --rm`. `image` is a tag ( `myproj:1` ), `recipe` the
-`Dockerfile` it is built from.
+`Dockerfile` it is built from; a change to it, or to what its `COPY` and `ADD` take from the project, rebuilds it.
+
+An image errand builds from a recipe is errand's: one it has no record of having built is built again, the one there
+kept ( `.prev` for an Apptainer image ), never adopted ( [ADR 0044](../../adr/0044-what-a-layer-builds-is-named-by-what-defines-it) ).
 
 `user` defaults to your own uid and gid. A run writes its results into the project, and a
 daemon-backed container writes as root unless told otherwise: the next run outside the container
