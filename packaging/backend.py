@@ -48,6 +48,12 @@ def compiled( into: Path ) -> dict:
     """The program of every system -> where each is"""
     if not shutil.which( "go" ):
         raise SystemExit( "errand is compiled by Go, which is not here ( https://go.dev ); a wheel of PyPI needs none" )
+    # the program carries `lib/errand/*.py` ( lib/embed.go ): its `_version.py` says this version. ( An editable install of
+    # errand-lib no longer writes it: lib/hatch_build.py )
+    said = ROOT / "lib" / "errand" / "_version.py"
+    text = f"__version__ = {VERSION!r}\n"
+    if not said.exists() or said.read_text() != text:
+        said.write_text( text )
     out = { }
     for system in SYSTEMS:
         goos, arch = system.split( "/" )
