@@ -26,7 +26,7 @@ errand.Env( [ errand.Micromamba( "demo", python = "3.12", packages = [ "numpy", 
 | `name` | a label for an environment of errand's ( what `errand envs` shows ); the environment itself for one of yours |
 | `python`, `channels`, `packages` | the conda part. `channels` in order: it is their priority |
 | `requirements` | a file relative to the project root, its lines added to `pip`. No `-e` line: that is `develop` |
-| `pip` | the pip part, resolved by uv over what conda gives |
+| `pip` | the pip part, resolved by uv over what conda gives. Packages only, locked with the hashes of their files: no `-e` nor local path ( that is `develop` ), no option of pip such as `--extra-index-url` |
 | `develop` | the packages you work on: installed `-e` over the environment, in an overlay of the project; their dependencies go into the environment |
 | `cuda` | `False`: the builds for the CPU, even on a machine with a card |
 | `executable` | a micromamba to use instead of errand's own |

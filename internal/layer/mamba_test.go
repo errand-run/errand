@@ -67,8 +67,31 @@ viz = ["matplotlib"]
 		t.Errorf("dynamic dependencies: %v", err)
 	}
 	write("requirements.txt", "-e ../x\n")
-	if _, err := DeclarationOf(project.Layer{"type": "Micromamba", "requirements": "requirements.txt"}, root); err == nil {
-		t.Error("an editable requirement goes in develop")
+	if _, err := DeclarationOf(project.Layer{"type": "Micromamba", "requirements": "requirements.txt"}, root); err == nil ||
+		!strings.Contains(err.Error(), `develop = [ "../x" ]`) {
+		t.Errorf("an editable requirement goes in develop: %v", err)
+	}
+	// what the pip part cannot lock is said with what to write instead, never left to uv's `--require-hashes`
+	for _, c := range []struct {
+		pip  []any
+		says string
+	}{
+		{[]any{"numpy", "-e", "/data/proj"}, `develop = [ "/data/proj" ]`},
+		{[]any{"-e ../sdot"}, `develop = [ "../sdot" ]`},
+		{[]any{"--editable=../sdot"}, `develop = [ "../sdot" ]`},
+		{[]any{"./loom"}, `develop = [ "./loom" ]`},
+		{[]any{"loom @ file:///home/me/loom"}, "develop"},
+		{[]any{"--extra-index-url", "https://download.pytorch.org/whl/cu126", "torch"}, "an option of pip"},
+	} {
+		_, err := DeclarationOf(project.Layer{"type": "Micromamba", "pip": c.pip}, root)
+		if err == nil || !strings.Contains(err.Error(), c.says) {
+			t.Errorf("pip %v: %v", c.pip, err)
+		}
+	}
+	for _, ok := range []string{"torch==2.14.1", "scipy ; python_version >= '3.11'", "pkg @ https://example.org/pkg-1.0.tar.gz"} {
+		if err := notARequirement("`pip`", ok, ""); err != nil {
+			t.Errorf("%s is a package: %v", ok, err)
+		}
 	}
 }
 

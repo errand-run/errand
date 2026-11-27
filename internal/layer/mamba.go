@@ -153,6 +153,15 @@ func DeclarationOf(l project.Layer, root string) (Declaration, error) {
 		d.NoCuda = true
 	}
 	pip := append([]string{}, l.Strings("pip")...)
+	for i, p := range pip {
+		next := ""
+		if i+1 < len(pip) {
+			next = pip[i+1]
+		}
+		if err := notARequirement("`pip`", p, next); err != nil {
+			return d, err
+		}
+	}
 	if r := l.String("requirements"); r != "" {
 		data, err := os.ReadFile(filepath.Join(root, r))
 		if err != nil {
@@ -165,8 +174,8 @@ func DeclarationOf(l project.Layer, root string) (Declaration, error) {
 			if line = strings.TrimSpace(line); line == "" || strings.HasPrefix(line, "#") {
 				continue
 			}
-			if strings.HasPrefix(line, "-e ") || strings.HasPrefix(line, "--editable") {
-				return d, fmt.Errorf("the requirements %s install %q as editable: it goes in `develop = [ … ]`", r, line)
+			if err := notARequirement("the requirements "+r, line, ""); err != nil {
+				return d, err
 			}
 			pip = append(pip, line)
 		}
@@ -224,6 +233,37 @@ func DeclarationOf(l project.Layer, root string) (Declaration, error) {
 	}
 	sort.Strings(d.Pip)
 	return d, nil
+}
+
+// notARequirement: why an item of the pip part ( `where` says which ) cannot be locked, nil when it can. The pip part is
+// resolved into exact versions with the hashes of their files ( ADR 0044 ): a directory has no hash, and an option of pip
+// is not a package. `next` is the item after it in a list, where `"-e", "path"` are two items.
+func notARequirement(where, item, next string) error {
+	item = strings.TrimSpace(item)
+	path := ""
+	switch {
+	case item == "-e" || item == "--editable":
+		path = next
+	case strings.HasPrefix(item, "-e ") || strings.HasPrefix(item, "--editable ") || strings.HasPrefix(item, "--editable="):
+		path = strings.TrimSpace(strings.TrimLeft(strings.TrimPrefix(strings.TrimPrefix(item, "--editable"), "-e"), "= "))
+	case strings.HasPrefix(item, "-"):
+		return fmt.Errorf("%s: %q is an option of pip, and the pip part only takes packages, which errand locks with the hashes "+
+			"of their files ( ADR 0044 ); an index of one's own is not supported. A build for a given CUDA comes from conda-forge, "+
+			"in `packages`", where, item)
+	case strings.HasPrefix(item, "/") || strings.HasPrefix(item, "./") || strings.HasPrefix(item, "../") || item == "." ||
+		strings.HasPrefix(item, "~") || strings.HasPrefix(item, "file:") || strings.Contains(item, "@ file:"):
+		path = item
+	default:
+		return nil
+	}
+	path = strings.TrimPrefix(strings.TrimPrefix(path, "file://"), "file:")
+	if path == "" {
+		path = "…"
+	}
+	return fmt.Errorf("%s: `-e` and local paths do not work in the pip part any more: errand locks it with the hashes of "+
+		"its files, and a directory has none ( ADR 0044 ). A package one works on goes in `develop = [ %q ]` ( a path from "+
+		"the project's root, on each machine ): errand installs it `-e` over the environment, and its dependencies into it",
+		where, path)
 }
 
 var notNameChar = regexp.MustCompile(`[-_.]+`)

@@ -31,7 +31,7 @@ A venv of errand's, made by uv in errand's store on the machine where it runs, a
 |---|---|
 | `name` | a label |
 | `python` | the version uv installs it with ( the exact one is written in the lock ) |
-| `requirements`, `pip` | its packages |
+| `requirements`, `pip` | its packages, locked with the hashes of their files: no `-e` nor local path ( that is `develop` ), no option of pip |
 | `develop` | the packages you work on, `-e` in an overlay of the project; their dependencies go into the venv |
 
 Everything else is as for [an environment of errand's](./micromamba#an-environment-of-errand-s): the store, a change by
